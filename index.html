@@ -104,7 +104,7 @@ function Carrinho({ itens, prods, mudar, limpar, sessao, cfg, onLogin }) {
 function Servicos({ sessao, cfg, onLogin }) {
   const [sv, setSv] = useState([]); const [pets, setPets] = useState([]); const [pet, setPet] = useState(""); const [s, setS] = useState(null);
   const [dia, setDia] = useState(null); const [oc, setOc] = useState([]); const [h, setH] = useState(null); const [obs, setObs] = useState(""); const [m, setM] = useState("");
-  useEffect(() => { sb.from("services").select("*").eq("ativo", true).order("nome").then((r) => setSv(r.data || [])); if (sessao) sb.from("pets").select("id,nome").then((r) => setPets(r.data || [])); }, [sessao]);
+  useEffect(() => { sb.from("services").select("*").eq("ativo", true).order("nome").then((r) => setSv(r.data || [])); if (sessao) sb.from("pets").select("id,nome").eq("user_id", sessao.user.id).then((r) => setPets(r.data || [])); }, [sessao]);
   useEffect(() => { setH(null); if (dia) sb.rpc("ocupados", { d: iso(dia) }).then((r) => setOc(r.data || [])); }, [dia]);
   const dias = Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return d; });
   const slots = []; if (s && cfg?.abre != null) for (let t = cfg.abre; t + s.duracao_min <= cfg.fecha; t += 30) slots.push(t);
@@ -132,7 +132,7 @@ function Servicos({ sessao, cfg, onLogin }) {
 function Pets({ sessao }) {
   const vazio = { nome: "", especie: "Cão", raca: "", nascimento: "", peso: "", obs: "" };
   const [l, setL] = useState([]); const [f, setF] = useState(vazio); const [m, setM] = useState("");
-  const ler = () => sb.from("pets").select("*").order("nome").then((r) => setL(r.data || []));
+  const ler = () => sb.from("pets").select("*").eq("user_id", sessao.user.id).order("nome").then((r) => setL(r.data || []));
   useEffect(() => { ler(); }, []);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const salvar = async () => {
@@ -151,7 +151,7 @@ function Pets({ sessao }) {
 
 function Conta({ sessao }) {
   const [ped, setPed] = useState([]); const [ag, setAg] = useState([]);
-  const ler = () => { sb.from("orders").select("*,order_items(nome,qtd)").order("criado_em", { ascending: false }).then((r) => setPed(r.data || [])); sb.from("appointments").select("*,services(nome),pets(nome)").order("data", { ascending: false }).then((r) => setAg(r.data || [])); };
+  const ler = () => { sb.from("orders").select("*,order_items(nome,qtd)").eq("user_id", sessao.user.id).order("criado_em", { ascending: false }).then((r) => setPed(r.data || [])); sb.from("appointments").select("*,services(nome),pets(nome)").eq("user_id", sessao.user.id).order("data", { ascending: false }).then((r) => setAg(r.data || [])); };
   useEffect(() => { ler(); }, []);
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Minha conta</h2><Card>{sessao.user.email}</Card>
     <h3 className="font-semibold">Pedidos</h3>{!ped.length && <p className="text-gray-400 text-sm">Nenhum pedido ainda.</p>}
@@ -162,8 +162,68 @@ function Conta({ sessao }) {
     <Btn className="w-full" onClick={() => sb.auth.signOut()}>Sair</Btn></div>;
 }
 
+const ST = ["aguardando_pagamento", "confirmado", "separacao", "enviado", "concluido", "cancelado"];
+function Pedidos() {
+  const [l, setL] = useState([]);
+  const ler = () => sb.from("orders").select("*,profiles(nome),order_items(nome,qtd)").order("criado_em", { ascending: false }).limit(100).then((r) => setL(r.data || []));
+  useEffect(() => { ler(); }, []);
+  const mes = new Date().toISOString().slice(0, 7);
+  const vend = l.filter((o) => !["aguardando_pagamento", "cancelado"].includes(o.status) && o.criado_em.slice(0, 7) === mes).reduce((t, o) => t + Number(o.total), 0);
+  return <div className="space-y-3"><div className="grid grid-cols-2 gap-3"><Card>Vendas confirmadas no mês<div className="gt text-xl">{brl(vend)}</div></Card><Card>Aguardando pagamento<div className="gt text-xl">{l.filter((o) => o.status === "aguardando_pagamento").length}</div></Card></div>
+    {!l.length && <p className="text-gray-400">Nenhum pedido ainda.</p>}
+    {l.map((o) => <Card key={o.id} className="space-y-1"><div className="flex justify-between"><b>#{o.id} · {o.profiles?.nome || "Cliente"}</b><b className="gt">{brl(o.total)}</b></div>
+      <div className="text-sm text-gray-400">{o.canal === "whatsapp" ? "WhatsApp" : "App"} · {o.entrega}{o.endereco ? " · " + o.endereco : ""}<br />{o.order_items.map((i) => `${i.qtd}x ${i.nome}`).join(", ")}</div>
+      <select className="w-full min-h-[44px] px-3 rounded-xl bg-[#111] border border-white/15" value={o.status} onChange={async (e) => { const r = await sb.from("orders").update({ status: e.target.value }).eq("id", o.id); if (r.error) alert(r.error.message); ler(); }}>{ST.map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}</select></Card>)}
+    <p className="text-xs text-gray-500">Cancelar um pedido não devolve o estoque automaticamente: ajuste em Produtos.</p></div>;
+}
+function AgendaAdm() {
+  const [d, setD] = useState(iso(new Date())); const [l, setL] = useState([]);
+  const ler = () => sb.from("appointments").select("*,profiles(nome),pets(nome),services(nome)").eq("data", d).order("inicio").then((r) => setL(r.data || []));
+  useEffect(() => { ler(); }, [d]);
+  const mudar = async (id, status) => { const r = await sb.from("appointments").update({ status }).eq("id", id); if (r.error) alert(r.error.message); ler(); };
+  return <div className="space-y-3"><Inp type="date" value={d} onChange={(e) => setD(e.target.value)} />
+    {!l.length && <p className="text-gray-400">Nenhum agendamento neste dia.</p>}
+    {l.map((a) => <Card key={a.id}><div className="flex justify-between"><b>{hhmm(a.inicio)}–{hhmm(a.fim)} · {a.services?.nome}</b><span className="gt">{a.status}</span></div>
+      <div className="text-sm text-gray-400">{a.pets?.nome} · {a.profiles?.nome}{a.obs ? " · " + a.obs : ""} · {brl(a.preco)}</div>
+      {a.status === "agendado" && <div className="grid grid-cols-2 gap-2 mt-2"><Btn gold onClick={() => mudar(a.id, "concluido")}>Concluir</Btn><Btn onClick={() => mudar(a.id, "cancelado")}>Cancelar</Btn></div>}</Card>)}</div>;
+}
+function Crud({ tab, campos, resumo, noNew, cats = [] }) {
+  const [l, setL] = useState([]); const [f, setF] = useState(null); const [m, setM] = useState("");
+  const ler = () => sb.from(tab).select("*").order("id").then((r) => setL(r.data || []));
+  useEffect(() => { setF(null); ler(); }, [tab]);
+  const salvar = async () => {
+    const o = {}; campos.forEach(([k, , tp]) => { const v = f[k]; o[k] = tp === "bool" ? !!v : (v === "" || v === undefined || v === null) ? null : (tp === "num" || tp === "cat") ? Number(v) : v; });
+    const r = f.id ? await sb.from(tab).update(o).eq("id", f.id) : await sb.from(tab).insert(o);
+    if (r.error) return setM(r.error.message); setF(null); setM(""); ler();
+  };
+  const apagar = async () => { if (!confirm("Excluir? Se já houver pedidos com este item, desative-o em vez de excluir.")) return; const r = await sb.from(tab).delete().eq("id", f.id); if (r.error) return setM(r.error.message); setF(null); setM(""); ler(); };
+  if (f) return <Card className="space-y-2"><b>{f.id ? "Editar" : "Novo"}</b>
+    {campos.map(([k, rot, tp]) => <label key={k} className="block text-sm text-gray-400">{rot}
+      {tp === "bool" ? <input type="checkbox" className="ml-3 w-5 h-5 align-middle" checked={!!f[k]} onChange={(e) => setF({ ...f, [k]: e.target.checked })} />
+        : tp === "cat" ? <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15 text-white" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })}><option value="">—</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select>
+        : <Inp type={tp === "num" ? "number" : "text"} step="any" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />}</label>)}
+    {m && <p className="text-sm text-amber-300">{m}</p>}
+    <Btn gold className="w-full" onClick={salvar}>Salvar</Btn><Btn className="w-full" onClick={() => { setF(null); setM(""); }}>Voltar</Btn>
+    {f.id && !noNew && <button className="text-sm text-red-400" onClick={apagar}>Excluir</button>}</Card>;
+  return <div className="space-y-2">{!noNew && <Btn gold className="w-full" onClick={() => setF({ ativo: true })}>+ Novo</Btn>}
+    {l.map((x) => <Card key={x.id} onClick={() => setF(x)} className="cursor-pointer text-sm">{resumo(x)}</Card>)}</div>;
+}
+function Admin() {
+  const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]);
+  useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); }, [t]);
+  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["loja", "Loja"]];
+  const off = (x) => x.ativo === false ? " (inativo)" : "";
+  return <div className="space-y-3"><h2 className="serif text-3xl gt">Painel</h2>
+    <div className="flex gap-2 overflow-x-auto pb-1">{abas.map(([id, l]) => <button key={id} onClick={() => setT(id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${t === id ? "gold border-transparent" : "border-white/20"}`}>{l}</button>)}</div>
+    {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm />
+    : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Link da foto", "t"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
+    : t === "servicos" ? <Crud tab="services" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço", "num"], ["duracao_min", "Duração (min)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · {x.duracao_min} min</div></>} />
+    : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Link da imagem", "t"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
+    : <Crud tab="store_settings" noNew campos={[["nome", "Nome da loja", "t"], ["whatsapp", "WhatsApp (55 + DDD + número)", "t"], ["endereco", "Endereço", "t"], ["abre", "Abre (minutos, 540 = 09:00)", "num"], ["fecha", "Fecha (minutos, 1080 = 18:00)", "num"]]} resumo={(x) => <><b>{x.nome}</b><div className="text-gray-400">WhatsApp: {x.whatsapp || "não definido"}<br />Horário: {x.abre != null ? hhmm(x.abre) + "–" + hhmm(x.fecha) : "não definido"}<br />Toque para editar</div></>} />}</div>;
+}
+
 function App() {
-  const [sessao, setSessao] = useState(undefined); const [aba, setAba] = useState("inicio"); const [cfg, setCfg] = useState(null);
+  const [sessao, setSessao] = useState(undefined); const [admin, setAdmin] = useState(false); const [aba, setAba] = useState("inicio"); const [cfg, setCfg] = useState(null);
   const [cats, setCats] = useState([]); const [prods, setProds] = useState([]); const [cart, setCart] = useState([]); const [nome, setNome] = useState("");
   useEffect(() => {
     if (!sb) return;
@@ -175,7 +235,7 @@ function App() {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
     return () => data.subscription.unsubscribe();
   }, []);
-  useEffect(() => { if (sessao) sb.from("profiles").select("nome").maybeSingle().then((r) => setNome(r.data?.nome || "")); }, [sessao?.user?.id]);
+  useEffect(() => { if (sessao) sb.from("profiles").select("nome,role").eq("id", sessao.user.id).maybeSingle().then((r) => { setNome(r.data?.nome || ""); setAdmin(r.data?.role === "admin"); }); else { setAdmin(false); setNome(""); } }, [sessao?.user?.id]);
   if (!sb) return <div className="min-h-screen text-white p-6 flex items-center justify-center text-center"><div><img src="logo.png" className="w-48 mx-auto mb-4" /><h1 className="serif text-3xl gt mb-2">Falta configurar o banco</h1><p className="text-gray-400">Rode o <b>schema.sql</b> num projeto Supabase novo e preencha <b>SUPABASE_URL</b> e <b>SUPABASE_KEY</b> no topo do index.html.</p></div></div>;
   if (sessao === undefined) return <div className="min-h-screen text-gray-400 flex items-center justify-center">Carregando...</div>;
   const add = (p) => setCart((c) => c.some((i) => i.id === p.id) ? c.map((i) => i.id === p.id ? { ...i, q: i.q + 1 } : i) : [...c, { id: p.id, q: 1 }]);
@@ -186,7 +246,7 @@ function App() {
   const priv = ["pets", "conta"].includes(aba) && !sessao;
   return <div className="min-h-screen text-gray-100 pb-24 max-w-2xl mx-auto">
     <header className="p-4 flex items-center justify-between border-b border-[#D4AF37]/20"><img src="logo.png" alt="Pets Boutique" className="h-16 w-16 object-contain rounded-full" />
-      <Btn className="relative" onClick={() => setAba("carrinho")}>Carrinho{n > 0 && <span className="ml-2 gold rounded-full px-2 text-sm">{n}</span>}</Btn></header>
+      <div className="flex gap-2">{admin && <Btn gold onClick={() => setAba("admin")}>Painel</Btn>}<Btn className="relative" onClick={() => setAba("carrinho")}>Carrinho{n > 0 && <span className="ml-2 gold rounded-full px-2 text-sm">{n}</span>}</Btn></div></header>
     <main className="p-4 space-y-4">
       {priv ? <Auth /> : aba === "inicio" ? <div className="space-y-4">
         <h1 className="serif text-4xl">{nome ? `Olá, ${nome.split(" ")[0]}` : "Bem-vindo"} <span className="gt">à Pets Boutique</span></h1>
@@ -198,7 +258,7 @@ function App() {
       : aba === "servicos" ? <Servicos sessao={sessao} cfg={cfg} onLogin={login} />
       : aba === "pets" ? <Pets sessao={sessao} />
       : aba === "carrinho" ? <Carrinho itens={cart} prods={prods} mudar={mudar} limpar={() => setCart([])} sessao={sessao} cfg={cfg} onLogin={login} />
-      : aba === "conta" ? (sessao ? <Conta sessao={sessao} /> : <Auth />) : null}
+      : aba === "admin" && admin ? <Admin /> : aba === "conta" ? (sessao ? <Conta sessao={sessao} /> : <Auth />) : null}
     </main>
     <nav className="fixed bottom-0 inset-x-0 max-w-2xl mx-auto bg-[#0f0f0f] border-t border-[#D4AF37]/25 flex">{tabs.map(([id, l]) => <button key={id} onClick={() => setAba(id)} className={`flex-1 min-h-[56px] text-xs ${aba === id ? "gt font-semibold" : "text-gray-400"}`}>{l}</button>)}</nav></div>;
 }
