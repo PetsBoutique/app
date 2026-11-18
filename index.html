@@ -200,6 +200,7 @@ function Crud({ tab, campos, resumo, noNew, cats = [] }) {
   if (f) return <Card className="space-y-2"><b>{f.id ? "Editar" : "Novo"}</b>
     {campos.map(([k, rot, tp]) => <label key={k} className="block text-sm text-gray-400">{rot}
       {tp === "bool" ? <input type="checkbox" className="ml-3 w-5 h-5 align-middle" checked={!!f[k]} onChange={(e) => setF({ ...f, [k]: e.target.checked })} />
+        : tp === "img" ? <div className="space-y-2"><Inp type="text" placeholder="Link da foto (ou envie abaixo)" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} /><input type="file" accept="image/*" className="text-sm" onChange={async (e) => { const fl = e.target.files[0]; if (!fl) return; const nm = `${tab}/${Date.now()}-${fl.name.replace(/[^\w.]/g, "_")}`; const r = await sb.storage.from("fotos").upload(nm, fl); if (r.error) return setM(r.error.message); setF({ ...f, [k]: sb.storage.from("fotos").getPublicUrl(nm).data.publicUrl }); }} />{f[k] && <img src={f[k]} className="w-24 h-24 object-cover rounded-xl" />}</div>
         : tp === "cat" ? <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15 text-white" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })}><option value="">—</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select>
         : <Inp type={tp === "num" ? "number" : "text"} step="any" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />}</label>)}
     {m && <p className="text-sm text-amber-300">{m}</p>}
@@ -208,17 +209,47 @@ function Crud({ tab, campos, resumo, noNew, cats = [] }) {
   return <div className="space-y-2">{!noNew && <Btn gold className="w-full" onClick={() => setF({ ativo: true })}>+ Novo</Btn>}
     {l.map((x) => <Card key={x.id} onClick={() => setF(x)} className="cursor-pointer text-sm">{resumo(x)}</Card>)}</div>;
 }
+const csv = (nome, linhas) => { const t = linhas.map((l) => l.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(";")).join("\n"); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\ufeff" + t], { type: "text/csv" })); a.download = nome; a.click(); };
+const PAGO = (s) => !["aguardando_pagamento", "cancelado"].includes(s);
+function Clientes() {
+  const [d, setD] = useState(null);
+  useEffect(() => { Promise.all([sb.from("profiles").select("id,nome,telefone,criado_em").order("criado_em", { ascending: false }), sb.from("orders").select("user_id,total,status"), sb.from("pets").select("user_id,nome,especie"), sb.from("appointments").select("user_id,status")]).then(([p, o, pe, a]) => setD({ p: p.data || [], o: o.data || [], pe: pe.data || [], a: a.data || [] })); }, []);
+  if (!d) return <p className="text-gray-400">Carregando...</p>;
+  const L = d.p.map((c) => { const os = d.o.filter((x) => x.user_id === c.id && PAGO(x.status)); const tot = os.reduce((t, x) => t + Number(x.total), 0); return { ...c, n: os.length, tot, tk: os.length ? tot / os.length : 0, pets: d.pe.filter((x) => x.user_id === c.id), at: d.a.filter((x) => x.user_id === c.id && x.status === "concluido").length }; });
+  return <div className="space-y-2"><Btn className="w-full" onClick={() => csv("clientes.csv", [["Nome", "Telefone", "Cadastro", "Pedidos", "Total gasto", "Ticket médio", "Atendimentos", "Pets"], ...L.map((c) => [c.nome, c.telefone, c.criado_em?.slice(0, 10), c.n, c.tot.toFixed(2), c.tk.toFixed(2), c.at, c.pets.map((p) => p.nome + " (" + p.especie + ")").join(", ")])])}>Exportar CSV</Btn>
+    <p className="text-sm text-gray-400">{L.length} clientes cadastrados</p>
+    {L.map((c) => <Card key={c.id} className="text-sm"><b>{c.nome || "Sem nome"}</b><div className="text-gray-400">{c.n} pedidos · {brl(c.tot)} · ticket médio {brl(c.tk)} · {c.at} atendimentos<br />Pets: {c.pets.length ? c.pets.map((p) => `${p.nome} (${p.especie})`).join(", ") : "nenhum"}</div></Card>)}</div>;
+}
+function Relatorios() {
+  const hoje = iso(new Date()); const [de, setDe] = useState(hoje.slice(0, 8) + "01"); const [ate, setAte] = useState(hoje); const [d, setD] = useState(null);
+  useEffect(() => { setD(null); const a = de + "T00:00:00", b = ate + "T23:59:59";
+    Promise.all([sb.from("orders").select("*,profiles(nome)").gte("criado_em", a).lte("criado_em", b), sb.from("order_items").select("qtd,preco,orders!inner(status,criado_em),products(categories(nome))").gte("orders.criado_em", a).lte("orders.criado_em", b), sb.from("appointments").select("preco,status,data,services(nome)").gte("data", de).lte("data", ate)])
+      .then(([o, i, ag]) => setD({ o: o.data || [], i: i.data || [], a: ag.data || [] })); }, [de, ate]);
+  const soma = (l, f) => l.reduce((t, x) => t + f(x), 0);
+  const grupo = (l, k, v) => Object.entries(l.reduce((m, x) => { const c = k(x); m[c] = (m[c] || 0) + v(x); return m; }, {})).sort((a, b) => b[1] - a[1]);
+  const ok = d ? d.o.filter((x) => PAGO(x.status)) : []; const fe = d ? d.a.filter((x) => x.status === "concluido") : [];
+  const Lista = ({ t, l }) => <Card><b>{t}</b>{!l.length && <div className="text-sm text-gray-400">Sem dados no período.</div>}{l.map(([k, v]) => <div key={k} className="flex justify-between text-sm py-1 border-b border-white/5"><span>{k}</span><span className="gt">{brl(v)}</span></div>)}</Card>;
+  return <div className="space-y-3"><div className="grid grid-cols-2 gap-2"><Inp type="date" value={de} onChange={(e) => setDe(e.target.value)} /><Inp type="date" value={ate} onChange={(e) => setAte(e.target.value)} /></div>
+    {!d ? <p className="text-gray-400">Carregando...</p> : <>
+      <div className="grid grid-cols-2 gap-3"><Card>Vendas (produtos)<div className="gt text-xl">{brl(soma(ok, (x) => Number(x.total)))}</div><div className="text-xs text-gray-400">{ok.length} pedidos</div></Card><Card>Serviços concluídos<div className="gt text-xl">{brl(soma(fe, (x) => Number(x.preco)))}</div><div className="text-xs text-gray-400">{fe.length} atendimentos</div></Card></div>
+      <Lista t="Vendas por canal" l={grupo(ok, (x) => x.canal === "whatsapp" ? "WhatsApp" : "App", (x) => Number(x.total))} />
+      <Lista t="Vendas por categoria" l={grupo(d.i.filter((x) => PAGO(x.orders.status)), (x) => x.products?.categories?.nome || "Sem categoria", (x) => x.qtd * x.preco)} />
+      <Lista t="Serviços realizados" l={grupo(fe, (x) => x.services?.nome || "Serviço", (x) => Number(x.preco))} />
+      <Btn className="w-full" onClick={() => csv("pedidos.csv", [["Pedido", "Data", "Cliente", "Canal", "Status", "Total"], ...d.o.map((x) => [x.id, x.criado_em.slice(0, 10), x.profiles?.nome, x.canal, x.status, Number(x.total).toFixed(2)])])}>Exportar pedidos (CSV)</Btn>
+      <p className="text-xs text-gray-500">Forma de pagamento e despesas ainda não são registradas pelo app.</p></>}</div>;
+}
+
 function Admin() {
   const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]);
   useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); }, [t]);
-  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["loja", "Loja"]];
+  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
   const off = (x) => x.ativo === false ? " (inativo)" : "";
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Painel</h2>
     <div className="flex gap-2 overflow-x-auto pb-1">{abas.map(([id, l]) => <button key={id} onClick={() => setT(id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${t === id ? "gold border-transparent" : "border-white/20"}`}>{l}</button>)}</div>
-    {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm />
-    : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Link da foto", "t"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
+    {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm /> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
+    : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Foto", "img"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
     : t === "servicos" ? <Crud tab="services" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço", "num"], ["duracao_min", "Duração (min)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · {x.duracao_min} min</div></>} />
-    : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Link da imagem", "t"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
+    : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Foto", "img"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
     : <Crud tab="store_settings" noNew campos={[["nome", "Nome da loja", "t"], ["whatsapp", "WhatsApp (55 + DDD + número)", "t"], ["endereco", "Endereço", "t"], ["abre", "Abre (minutos, 540 = 09:00)", "num"], ["fecha", "Fecha (minutos, 1080 = 18:00)", "num"]]} resumo={(x) => <><b>{x.nome}</b><div className="text-gray-400">WhatsApp: {x.whatsapp || "não definido"}<br />Horário: {x.abre != null ? hhmm(x.abre) + "–" + hhmm(x.fecha) : "não definido"}<br />Toque para editar</div></>} />}</div>;
 }
 
