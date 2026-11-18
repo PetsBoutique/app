@@ -27,7 +27,7 @@ const brl = (v) => "R$ " + Number(v || 0).toFixed(2).replace(".", ",");
 const pr = (p) => p.preco_promo ?? p.preco;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const iso = (d) => d.toLocaleDateString("sv-SE");
-const MSG = { login_necessario: "Entre na sua conta para continuar.", horario_ocupado: "Esse horário acabou de ser ocupado. Escolha outro.", carrinho_vazio: "Carrinho vazio." };
+const MSG = { login_necessario: "Entre na sua conta para continuar.", horario_ocupado: "Esse horário acabou de ser ocupado. Escolha outro.", horario_bloqueado: "A loja não atende nesse horário. Escolha outro.", carrinho_vazio: "Carrinho vazio." };
 const erro = (e) => { const m = e?.message || ""; if (m.startsWith("sem_estoque")) return "Sem estoque suficiente: " + m.split(":")[1]; if (m.startsWith("exige_receita")) return "Medicamento com receita: peça pelo atendimento da loja (" + m.split(":")[1] + ")."; return MSG[m] || m || "Erro inesperado"; };
 
 const Btn = ({ gold, className = "", ...p }) => <button {...p} className={`min-h-[48px] px-5 rounded-xl font-semibold active:scale-95 transition disabled:opacity-40 ${gold ? "gold" : "bg-[#222] text-gray-100 border border-white/10"} ${className}`} />;
@@ -103,15 +103,15 @@ function Carrinho({ itens, prods, mudar, limpar, sessao, cfg, onLogin }) {
 
 function Servicos({ sessao, cfg, onLogin }) {
   const [sv, setSv] = useState([]); const [pets, setPets] = useState([]); const [pet, setPet] = useState(""); const [s, setS] = useState(null);
-  const [dia, setDia] = useState(null); const [oc, setOc] = useState([]); const [h, setH] = useState(null); const [obs, setObs] = useState(""); const [m, setM] = useState("");
-  useEffect(() => { sb.from("services").select("*").eq("ativo", true).order("nome").then((r) => setSv(r.data || [])); if (sessao) sb.from("pets").select("id,nome").eq("user_id", sessao.user.id).then((r) => setPets(r.data || [])); }, [sessao]);
-  useEffect(() => { setH(null); if (dia) sb.rpc("ocupados", { d: iso(dia) }).then((r) => setOc(r.data || [])); }, [dia]);
+  const [st, setSt] = useState([]); const [prof, setProf] = useState(""); const [dia, setDia] = useState(null); const [oc, setOc] = useState([]); const [h, setH] = useState(null); const [obs, setObs] = useState(""); const [m, setM] = useState("");
+  useEffect(() => { sb.from("services").select("*").eq("ativo", true).order("nome").then((r) => setSv(r.data || [])); sb.from("staff").select("*").eq("ativo", true).order("nome").then((r) => setSt(r.data || [])); if (sessao) sb.from("pets").select("id,nome").eq("user_id", sessao.user.id).then((r) => setPets(r.data || [])); }, [sessao]);
+  useEffect(() => { setH(null); if (dia && prof) sb.rpc("ocupados", { d: iso(dia), p_staff: +prof }).then((r) => setOc(r.data || [])); }, [dia, prof]);
   const dias = Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return d; });
-  const slots = []; if (s && cfg?.abre != null) for (let t = cfg.abre; t + s.duracao_min <= cfg.fecha; t += 30) slots.push(t);
+  const slots = []; if (s && prof && cfg?.abre != null) for (let t = cfg.abre; t + s.duracao_min <= cfg.fecha; t += 30) slots.push(t);
   const livre = (t) => !oc.some((o) => t < o.fim && t + s.duracao_min > o.inicio);
   const ok = async () => {
-    const r = await sb.rpc("agendar", { p_pet: +pet, p_serv: s.id, p_data: iso(dia), p_inicio: h, p_obs: obs || null });
-    if (r.error) { setM(erro(r.error)); return sb.rpc("ocupados", { d: iso(dia) }).then((x) => setOc(x.data || [])); }
+    const r = await sb.rpc("agendar", { p_pet: +pet, p_serv: s.id, p_data: iso(dia), p_inicio: h, p_obs: obs || null, p_staff: +prof });
+    if (r.error) { setM(erro(r.error)); return sb.rpc("ocupados", { d: iso(dia), p_staff: +prof }).then((x) => setOc(x.data || [])); }
     setM("Agendamento confirmado!"); setS(null); setDia(null); setH(null);
   };
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Banho e Tosa</h2>
@@ -122,11 +122,12 @@ function Servicos({ sessao, cfg, onLogin }) {
     {s && sessao && <>
       {!pets.length ? <p className="text-amber-300 text-sm">Cadastre um pet em “Meus Pets” antes de agendar.</p> :
         <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15" value={pet} onChange={(e) => setPet(e.target.value)}><option value="">Escolha o pet</option>{pets.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}</select>}
+      <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15" value={prof} onChange={(e) => setProf(e.target.value)}><option value="">Escolha o profissional</option>{st.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}</select>
       <div className="flex gap-2 overflow-x-auto">{dias.map((d) => <button key={iso(d)} onClick={() => setDia(d)} className={`shrink-0 w-16 min-h-[56px] rounded-xl border ${dia && iso(dia) === iso(d) ? "gold" : "border-white/20"}`}>{d.toLocaleDateString("pt-BR", { weekday: "short" })}<br />{d.getDate()}</button>)}</div>
       {dia && !slots.length && <p className="text-sm text-amber-300">Horários de funcionamento ainda não configurados pela loja.</p>}
       {dia && <div className="grid grid-cols-4 gap-2">{slots.map((t) => <button key={t} disabled={!livre(t)} onClick={() => setH(t)} className={`min-h-[44px] rounded-xl border disabled:opacity-25 ${h === t ? "gold" : "border-white/20"}`}>{hhmm(t)}</button>)}</div>}
       <Inp placeholder="Observações (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} />
-      <Btn gold className="w-full" disabled={!pet || !dia || h == null} onClick={ok}>Confirmar agendamento</Btn></>}<Planos sessao={sessao} onLogin={onLogin} /></div>;
+      <Btn gold className="w-full" disabled={!pet || !prof || !dia || h == null} onClick={ok}>Confirmar agendamento</Btn></>}<Planos sessao={sessao} onLogin={onLogin} /></div>;
 }
 
 function Pets({ sessao }) {
@@ -178,13 +179,13 @@ function Pedidos() {
 }
 function AgendaAdm() {
   const [d, setD] = useState(iso(new Date())); const [l, setL] = useState([]);
-  const ler = () => sb.from("appointments").select("*,profiles(nome),pets(nome),services(nome)").eq("data", d).order("inicio").then((r) => setL(r.data || []));
+  const ler = () => sb.from("appointments").select("*,profiles(nome),pets(nome),services(nome),staff(nome)").eq("data", d).order("inicio").then((r) => setL(r.data || []));
   useEffect(() => { ler(); }, [d]);
   const mudar = async (id, status) => { const r = await sb.from("appointments").update({ status }).eq("id", id); if (r.error) alert(r.error.message); ler(); };
   return <div className="space-y-3"><Inp type="date" value={d} onChange={(e) => setD(e.target.value)} />
     {!l.length && <p className="text-gray-400">Nenhum agendamento neste dia.</p>}
     {l.map((a) => <Card key={a.id}><div className="flex justify-between"><b>{hhmm(a.inicio)}–{hhmm(a.fim)} · {a.services?.nome}</b><span className="gt">{a.status}</span></div>
-      <div className="text-sm text-gray-400">{a.pets?.nome} · {a.profiles?.nome}{a.obs ? " · " + a.obs : ""} · {brl(a.preco)}</div>
+      <div className="text-sm text-gray-400">{a.staff?.nome} · {a.pets?.nome} · {a.profiles?.nome}{a.obs ? " · " + a.obs : ""} · {brl(a.preco)}</div>
       {a.status === "agendado" && <div className="grid grid-cols-2 gap-2 mt-2"><Btn gold onClick={() => mudar(a.id, "concluido")}>Concluir</Btn><Btn onClick={() => mudar(a.id, "cancelado")}>Cancelar</Btn></div>}</Card>)}</div>;
 }
 function Crud({ tab, campos, resumo, noNew, cats = [] }) {
@@ -202,7 +203,7 @@ function Crud({ tab, campos, resumo, noNew, cats = [] }) {
       {tp === "bool" ? <input type="checkbox" className="ml-3 w-5 h-5 align-middle" checked={!!f[k]} onChange={(e) => setF({ ...f, [k]: e.target.checked })} />
         : tp === "img" ? <div className="space-y-2"><Inp type="text" placeholder="Link da foto (ou envie abaixo)" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} /><input type="file" accept="image/*" className="text-sm" onChange={async (e) => { const fl = e.target.files[0]; if (!fl) return; const nm = `${tab}/${Date.now()}-${fl.name.replace(/[^\w.]/g, "_")}`; const r = await sb.storage.from("fotos").upload(nm, fl); if (r.error) return setM(r.error.message); setF({ ...f, [k]: sb.storage.from("fotos").getPublicUrl(nm).data.publicUrl }); }} />{f[k] && <img src={f[k]} className="w-24 h-24 object-cover rounded-xl" />}</div>
         : tp === "cat" ? <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15 text-white" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })}><option value="">—</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</select>
-        : <Inp type={tp === "num" ? "number" : "text"} step="any" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />}</label>)}
+        : <Inp type={tp === "num" ? "number" : tp === "date" ? "date" : "text"} step="any" value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />}</label>)}
     {m && <p className="text-sm text-amber-300">{m}</p>}
     <Btn gold className="w-full" onClick={salvar}>Salvar</Btn><Btn className="w-full" onClick={() => { setF(null); setM(""); }}>Voltar</Btn>
     {f.id && !noNew && <button className="text-sm text-red-400" onClick={apagar}>Excluir</button>}</Card>;
@@ -260,13 +261,15 @@ function Assinaturas() {
 }
 
 function Admin() {
-  const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]);
-  useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); }, [t]);
-  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["planos", "Planos"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
+  const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]); const [eq, setEq] = useState([]);
+  useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); sb.from("staff").select("id,nome").order("nome").then((r) => setEq(r.data || [])); }, [t]);
+  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["equipe", "Equipe e bloqueios"], ["planos", "Planos"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
   const off = (x) => x.ativo === false ? " (inativo)" : "";
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Painel</h2>
     <div className="flex gap-2 overflow-x-auto pb-1">{abas.map(([id, l]) => <button key={id} onClick={() => setT(id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${t === id ? "gold border-transparent" : "border-white/20"}`}>{l}</button>)}</div>
-    {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm /> : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
+    {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm /> 
+    : t === "equipe" ? <><b>Profissionais</b><Crud tab="staff" campos={[["nome", "Nome", "t"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}</>} /><b className="block pt-2">Bloqueios de agenda</b><Crud tab="blocks" cats={eq} campos={[["data", "Data", "date"], ["hora_ini", "Início (minutos; vazio = dia todo)", "num"], ["hora_fim", "Fim (minutos; vazio = dia todo)", "num"], ["staff_id", "Profissional (vazio = todos)", "cat"], ["motivo", "Motivo", "t"]]} resumo={(x) => <><b>{x.data.split("-").reverse().join("/")}</b> · {x.hora_ini != null ? hhmm(x.hora_ini) + "–" + hhmm(x.hora_fim) : "dia todo"} · {eq.find((e) => e.id === x.staff_id)?.nome || "todos"}<div className="text-gray-400">{x.motivo}</div></>} /></>
+    : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
     : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Foto", "img"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
     : t === "servicos" ? <Crud tab="services" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço", "num"], ["duracao_min", "Duração (min)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · {x.duracao_min} min</div></>} />
     : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Foto", "img"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
