@@ -28,7 +28,7 @@ const brl = (v) => "R$ " + Number(v || 0).toFixed(2).replace(".", ",");
 const pr = (p) => p.preco_promo ?? p.preco;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const iso = (d) => d.toLocaleDateString("sv-SE");
-const MSG = { login_necessario: "Entre na sua conta para continuar.", horario_ocupado: "Esse horário acabou de ser ocupado. Escolha outro.", horario_bloqueado: "A loja não atende nesse horário. Escolha outro.", carrinho_vazio: "Carrinho vazio." };
+const MSG = { login_necessario: "Entre na sua conta para continuar.", horario_ocupado: "Esse horário acabou de ser ocupado. Escolha outro.", horario_bloqueado: "A loja não atende nesse horário. Escolha outro.", carrinho_vazio: "Carrinho vazio.", cupom_invalido: "Cupom inválido.", cupom_expirado: "Cupom expirado.", cupom_esgotado: "Cupom esgotado.", cupom_minimo: "Pedido abaixo do valor mínimo do cupom.", cupom_ja_usado: "Você já usou este cupom." };
 const erro = (e) => { const m = e?.message || ""; if (m.startsWith("sem_estoque")) return "Sem estoque suficiente: " + m.split(":")[1]; if (m.startsWith("exige_receita")) return "Medicamento com receita: peça pelo atendimento da loja (" + m.split(":")[1] + ")."; return MSG[m] || m || "Erro inesperado"; };
 
 const Btn = ({ gold, className = "", ...p }) => <button {...p} className={`min-h-[48px] px-5 rounded-xl font-semibold active:scale-95 transition disabled:opacity-40 ${gold ? "gold" : "bg-[#222] text-gray-100 border border-white/10"} ${className}`} />;
@@ -72,18 +72,18 @@ function Loja({ cats, prods, add, busca0 = "" }) {
 }
 
 function Carrinho({ itens, prods, mudar, limpar, sessao, cfg, onLogin }) {
-  const [ent, setEnt] = useState("retirada"); const [end, setEnd] = useState(""); const [busy, setBusy] = useState(false); const [m, setM] = useState("");
+  const [ent, setEnt] = useState("retirada"); const [end, setEnd] = useState(""); const [busy, setBusy] = useState(false); const [m, setM] = useState(""); const [cup, setCup] = useState(""); const [ap, setAp] = useState(null);
   const lin = itens.map((i) => ({ ...i, p: prods.find((p) => p.id === i.id) })).filter((i) => i.p);
   const sub = lin.reduce((t, i) => t + i.q * pr(i.p), 0);
   const criar = async (canal) => {
     if (!sessao) return onLogin(); if (ent === "entrega" && !end.trim()) return setM("Informe o endereço de entrega.");
     setBusy(true); setM("");
-    const r = await sb.rpc("criar_pedido", { itens: itens.map((i) => ({ id: i.id, q: i.q })), canal, entrega: ent, endereco: end || null });
+    const r = await sb.rpc("criar_pedido", { itens: itens.map((i) => ({ id: i.id, q: i.q })), canal, entrega: ent, endereco: end || null, p_cupom: ap ? ap.codigo : null });
     setBusy(false); if (r.error) return setM(erro(r.error));
-    const { id, total } = r.data;
+    const { id, total, desconto } = r.data;
     if (canal === "whatsapp") {
       if (!cfg?.whatsapp) { setM(`Pedido #${id} registrado, mas o WhatsApp da loja ainda não foi configurado.`); return limpar(); }
-      const t = `Olá! Pedido #${id} (Pets Boutique)\nCliente: ${sessao.user.user_metadata?.nome || sessao.user.email}\n` + lin.map((i) => `• ${i.q}x ${i.p.nome} — ${brl(i.q * pr(i.p))}`).join("\n") + `\nTotal: ${brl(total)}\n${ent === "entrega" ? "Entrega: " + end : "Retirada na loja"}`;
+      const t = `Olá! Pedido #${id} (Pets Boutique)\nCliente: ${sessao.user.user_metadata?.nome || sessao.user.email}\n` + lin.map((i) => `• ${i.q}x ${i.p.nome} — ${brl(i.q * pr(i.p))}`).join("\n") + (desconto > 0 ? `\nCupom ${ap?.codigo}: -${brl(desconto)}` : "") + `\nTotal: ${brl(total)}\n${ent === "entrega" ? "Entrega: " + end : "Retirada na loja"}`;
       limpar(); window.open(`https://wa.me/${String(cfg.whatsapp).replace(/\D/g, "")}?text=${encodeURIComponent(t)}`, "_blank");
     } else {
       const c = await sb.functions.invoke("pagbank-cobranca", { body: { order_id: id } });
@@ -96,6 +96,8 @@ function Carrinho({ itens, prods, mudar, limpar, sessao, cfg, onLogin }) {
     <Btn className="!min-w-[44px] !px-0" onClick={() => mudar(i.id, -1)}>−</Btn><b>{i.q}</b><Btn className="!min-w-[44px] !px-0" onClick={() => mudar(i.id, 1)}>+</Btn></Card>)}
     <div className="flex justify-between text-lg"><span>Subtotal</span><b className="gt">{brl(sub)}</b></div>
     <p className="text-xs text-gray-400">O total final é calculado e conferido pelo servidor. Frete a combinar com a loja.</p>
+    <div className="flex gap-2"><Inp placeholder="Cupom de desconto" value={cup} onChange={(e) => { setCup(e.target.value); setAp(null); }} /><Btn className="shrink-0" onClick={async () => { if (!sessao) return onLogin(); const r = await sb.rpc("validar_cupom", { p_codigo: cup, p_subtotal: sub }); if (r.error) { setAp(null); setM(erro(r.error)); } else { setAp(r.data); setM(""); } }}>Aplicar</Btn></div>
+    {ap && <div className="flex justify-between text-sm"><span>Cupom {ap.codigo}</span><b className="gt">-{brl(ap.desconto)}</b></div>}
     <div className="grid grid-cols-2 gap-2">{["retirada", "entrega"].map((e) => <Btn key={e} gold={ent === e} onClick={() => setEnt(e)}>{e === "retirada" ? "Retirar na loja" : "Entrega"}</Btn>)}</div>
     {ent === "entrega" && <Inp placeholder="Endereço completo" value={end} onChange={(e) => setEnd(e.target.value)} />}
     {m && <p className="text-sm text-amber-300">{m}</p>}
@@ -153,11 +155,24 @@ function Pets({ sessao }) {
       {m && <p className="text-sm text-amber-300">{m}</p>}<Btn gold className="w-full" onClick={salvar}>Salvar pet</Btn></Card></div>;
 }
 
+function Fidelidade({ sessao }) {
+  const [p, setP] = useState(null); const [cf, setCf] = useState(null); const [ind, setInd] = useState(null); const [cp, setCp] = useState([]); const [ok, setOk] = useState(false);
+  useEffect(() => { sb.from("profiles").select("selos,codigo").eq("id", sessao.user.id).maybeSingle().then((r) => setP(r.data)); sb.from("store_settings").select("selos_meta,premio").maybeSingle().then((r) => setCf(r.data)); sb.rpc("minhas_indicacoes").then((r) => setInd(r.data)); sb.from("coupons").select("*").eq("ativo", true).eq("publico", true).then((r) => setCp(r.data || [])); }, []);
+  const meta = cf?.selos_meta || 10; const selos = p?.selos || 0;
+  const link = p?.codigo ? `${location.origin}${location.pathname}?ind=${p.codigo}` : "";
+  return <div className="space-y-3"><Card><b className="gt serif text-2xl">Cartão fidelidade</b>
+    <div className="grid grid-cols-5 gap-2 my-3">{Array.from({ length: meta }, (_, k) => <div key={k} className={`aspect-square rounded-full flex items-center justify-center border-2 text-sm ${k < selos ? "gold border-transparent font-bold" : "border-white/20 text-gray-500"}`}>{k + 1}</div>)}</div>
+    <p className="text-sm text-gray-400">{selos >= meta ? `Prêmio liberado${cf?.premio ? ": " + cf.premio : ""}! Mostre este cartão na loja.` : `Faltam ${meta - selos} atendimentos para o seu prêmio${cf?.premio ? " (" + cf.premio + ")" : ""}.`}</p></Card>
+    <Card className="space-y-2"><b className="gt">Indique um amigo</b><p className="text-sm text-gray-400">Quando o seu amigo concluir o primeiro atendimento, você ganha um selo.{ind ? ` Indicações: ${ind.total} (${ind.premiadas} já premiadas).` : ""}</p>
+      {link && <><div className="text-xs break-all text-gray-300">{link}</div><div className="grid grid-cols-2 gap-2"><Btn onClick={() => { navigator.clipboard?.writeText(link); setOk(true); }}>{ok ? "Copiado!" : "Copiar link"}</Btn><a target="_blank" href={`https://wa.me/?text=${encodeURIComponent("Conheça a Pets Boutique: " + link)}`}><Btn gold className="w-full">WhatsApp</Btn></a></div></>}</Card>
+    {cp.length > 0 && <Card><b className="gt">Cupons disponíveis</b>{cp.map((c) => <div key={c.id} className="text-sm py-1 border-b border-white/5"><b>{c.codigo}</b> · {c.tipo === "percentual" ? c.valor + "%" : brl(c.valor)} de desconto{c.minimo > 0 ? ` a partir de ${brl(c.minimo)}` : ""}{c.validade ? ` · até ${c.validade.split("-").reverse().join("/")}` : ""}</div>)}<p className="text-xs text-gray-500 mt-1">Use o código no carrinho.</p></Card>}</div>;
+}
+
 function Conta({ sessao }) {
   const [ped, setPed] = useState([]); const [ag, setAg] = useState([]);
   const ler = () => { sb.from("orders").select("*,order_items(nome,qtd)").eq("user_id", sessao.user.id).order("criado_em", { ascending: false }).then((r) => setPed(r.data || [])); sb.from("appointments").select("*,services(nome),pets(nome)").eq("user_id", sessao.user.id).order("data", { ascending: false }).then((r) => setAg(r.data || [])); };
   useEffect(() => { ler(); }, []);
-  return <div className="space-y-3"><h2 className="serif text-3xl gt">Minha conta</h2><Card>{sessao.user.email}</Card>
+  return <div className="space-y-3"><h2 className="serif text-3xl gt">Minha conta</h2><Card>{sessao.user.email}</Card><Fidelidade sessao={sessao} />
     <h3 className="font-semibold">Pedidos</h3>{!ped.length && <p className="text-gray-400 text-sm">Nenhum pedido ainda.</p>}
     {ped.map((o) => <Card key={o.id}><div className="flex justify-between"><b>#{o.id}</b><span className="gt">{o.status.replace("_", " ")}</span></div><div className="text-sm text-gray-400">{o.order_items.map((i) => `${i.qtd}x ${i.nome}`).join(", ")}</div><b>{brl(o.total)}</b></Card>)}
     <h3 className="font-semibold">Agendamentos</h3>{!ag.length && <p className="text-gray-400 text-sm">Nenhum agendamento.</p>}
@@ -217,13 +232,13 @@ const csv = (nome, linhas) => { const t = linhas.map((l) => l.map((c) => `"${Str
 const PAGO = (s) => !["aguardando_pagamento", "cancelado"].includes(s);
 function Clientes() {
   const [d, setD] = useState(null); const [sel, setSel] = useState(null); const [f, setF] = useState(null); const [q, setQ] = useState(""); const [m, setM] = useState("");
-  const ler = () => Promise.all([sb.from("profiles").select("id,nome,telefone,criado_em"), sb.from("customers").select("*"), sb.from("orders").select("id,user_id,total,status,criado_em"), sb.from("pets").select("user_id,nome,especie,raca"), sb.from("appointments").select("user_id,status,data,preco,services(nome)"), sb.from("comandas").select("id,numero,customer_id,total,status,fechada_em,itens")])
-    .then(([p, c, o, pe, a, cm]) => setD({ p: p.data || [], c: c.data || [], o: o.data || [], pe: pe.data || [], a: a.data || [], cm: cm.data || [] }));
+  const ler = () => Promise.all([sb.from("profiles").select("id,nome,telefone,criado_em,selos"), sb.from("customers").select("*"), sb.from("orders").select("id,user_id,total,status,criado_em"), sb.from("pets").select("user_id,nome,especie,raca"), sb.from("appointments").select("user_id,status,data,preco,services(nome)"), sb.from("comandas").select("id,numero,customer_id,total,status,fechada_em,itens"), sb.from("store_settings").select("selos_meta,premio").maybeSingle()])
+    .then(([p, c, o, pe, a, cm, ss]) => setD({ ss: ss.data, p: p.data || [], c: c.data || [], o: o.data || [], pe: pe.data || [], a: a.data || [], cm: cm.data || [] }));
   useEffect(() => { ler(); }, []);
   if (!d) return <p className="text-gray-400">Carregando...</p>;
   const mk = (x) => { const h = x.hist.sort((a, b) => String(b.data).localeCompare(String(a.data))); const tot = h.reduce((t, i) => t + Number(i.valor), 0); return { ...x, hist: h, n: h.length, tot, tk: h.length ? tot / h.length : 0, ult: h[0]?.data?.slice(0, 10) || "" }; };
   const L = [
-    ...d.p.map((c) => mk({ key: "a" + c.id, tipo: "App", nome: c.nome || "Sem nome", tel: c.telefone, id: c.id, pets: d.pe.filter((x) => x.user_id === c.id), hist: [...d.a.filter((x) => x.user_id === c.id && x.status === "concluido").map((x) => ({ data: x.data, valor: x.preco, desc: x.services?.nome || "Serviço" })), ...d.o.filter((x) => x.user_id === c.id && PAGO(x.status)).map((x) => ({ data: x.criado_em, valor: x.total, desc: "Pedido #" + x.id }))] })),
+    ...d.p.map((c) => mk({ key: "a" + c.id, tipo: "App", nome: c.nome || "Sem nome", tel: c.telefone, id: c.id, selos: c.selos || 0, pets: d.pe.filter((x) => x.user_id === c.id), hist: [...d.a.filter((x) => x.user_id === c.id && x.status === "concluido").map((x) => ({ data: x.data, valor: x.preco, desc: x.services?.nome || "Serviço" })), ...d.o.filter((x) => x.user_id === c.id && PAGO(x.status)).map((x) => ({ data: x.criado_em, valor: x.total, desc: "Pedido #" + x.id }))] })),
     ...d.c.map((c) => mk({ key: "b" + c.id, tipo: "Balcão", nome: c.nome, tel: c.telefone, obs: c.obs, id: c.id, pets: [], hist: d.cm.filter((x) => x.customer_id === c.id && x.status === "fechada").map((x) => ({ data: x.fechada_em, valor: x.total, desc: "Comanda " + x.numero + ": " + (x.itens || []).map((i) => i.nome).join(", ") })) })),
   ].filter((c) => (c.nome + " " + (c.tel || "")).toLowerCase().includes(q.toLowerCase())).sort((a, b) => a.nome.localeCompare(b.nome));
   const dias = (s) => s ? Math.floor((Date.now() - new Date(s)) / 864e5) : null; const dd = (s) => s.split("-").reverse().join("/");
@@ -234,6 +249,7 @@ function Clientes() {
     <div className="text-sm text-gray-400">{c.tel ? <a className="gt" target="_blank" href={`https://wa.me/${String(c.tel).replace(/\D/g, "")}`}>{c.tel} (WhatsApp)</a> : "Sem telefone"}{c.obs ? <><br />{c.obs}</> : null}</div></Card>
     <div className="grid grid-cols-3 gap-2"><Card className="!p-3 text-center text-sm">Visitas<div className="gt text-lg">{c.n}</div></Card><Card className="!p-3 text-center text-sm">Total<div className="gt text-lg">{brl(c.tot)}</div></Card><Card className="!p-3 text-center text-sm">Ticket<div className="gt text-lg">{brl(c.tk)}</div></Card></div>
     <Card className="text-sm">Última visita: {c.ult ? `${dd(c.ult)} (há ${dias(c.ult)} dias)` : "nenhuma"}{c.tipo === "App" && <><br />Pets: {c.pets.length ? c.pets.map((p) => `${p.nome} (${p.especie}${p.raca ? ", " + p.raca : ""})`).join("; ") : "nenhum cadastrado"}</>}</Card>
+    {c.tipo === "App" && <Card className="text-sm flex items-center justify-between gap-2"><span>Selos: <b className="gt">{c.selos}/{d.ss?.selos_meta || 10}</b>{c.selos >= (d.ss?.selos_meta || 10) ? " · prêmio liberado" : ""}</span>{c.selos >= (d.ss?.selos_meta || 10) && <Btn gold className="!min-h-[40px]" onClick={async () => { if (confirm("Entregar o prêmio e descontar os selos?")) { const r = await sb.rpc("resgatar_premio", { p_user: c.id }); if (r.error) alert(r.error.message); ler(); } }}>Resgatar prêmio</Btn>}</Card>}
     <b>Histórico</b>{!c.hist.length && <p className="text-sm text-gray-400">Sem compras ou atendimentos.</p>}{c.hist.slice(0, 30).map((h, i) => <Card key={i} className="!p-3 text-sm flex justify-between gap-2"><span>{dd(String(h.data).slice(0, 10))} · {h.desc}</span><b className="gt shrink-0">{brl(h.valor)}</b></Card>)}
     {c.tipo === "Balcão" && <div className="grid grid-cols-2 gap-2"><Btn onClick={() => setF(d.c.find((x) => x.id === c.id))}>Editar</Btn><Btn onClick={async () => { if (confirm(`Excluir ${c.nome}? As comandas antigas continuam no histórico do caixa.`)) { await sb.from("customers").delete().eq("id", c.id); setSel(null); ler(); } }}>Excluir</Btn></div>}
     <Btn className="w-full" onClick={() => setSel(null)}>Voltar</Btn></div>;
@@ -359,17 +375,17 @@ function Caixa() {
 function Admin() {
   const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]); const [eq, setEq] = useState([]); const [sv, setSv] = useState([]);
   useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); sb.from("staff").select("id,nome").order("nome").then((r) => setEq(r.data || [])); sb.from("services").select("id,nome").order("nome").then((r) => setSv(r.data || [])); }, [t]);
-  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["caixa", "Caixa"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["equipe", "Equipe e bloqueios"], ["planos", "Planos"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
+  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["caixa", "Caixa"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["equipe", "Equipe e bloqueios"], ["planos", "Planos"], ["cupons", "Cupons"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
   const off = (x) => x.ativo === false ? " (inativo)" : "";
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Painel</h2>
     <div className="flex gap-2 overflow-x-auto pb-1">{abas.map(([id, l]) => <button key={id} onClick={() => setT(id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${t === id ? "gold border-transparent" : "border-white/20"}`}>{l}</button>)}</div>
     {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm /> : t === "caixa" ? <Caixa /> 
     : t === "equipe" ? <><b>Profissionais</b><Crud tab="staff" campos={[["nome", "Nome", "t"], ["comissao_pct", "Comissão (%)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">Comissão {x.comissao_pct}%</div></>} /><b className="block pt-2">Bloqueios de agenda</b><Crud tab="blocks" cats={eq} campos={[["data", "Data", "date"], ["hora_ini", "Início (minutos; vazio = dia todo)", "num"], ["hora_fim", "Fim (minutos; vazio = dia todo)", "num"], ["staff_id", "Profissional (vazio = todos)", "cat"], ["motivo", "Motivo", "t"]]} resumo={(x) => <><b>{x.data.split("-").reverse().join("/")}</b> · {x.hora_ini != null ? hhmm(x.hora_ini) + "–" + hhmm(x.hora_fim) : "dia todo"} · {eq.find((e) => e.id === x.staff_id)?.nome || "todos"}<div className="text-gray-400">{x.motivo}</div></>} /></>
-    : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" cats={sv} campos={[["service_id", "Serviço incluído no plano", "cat"], ["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
+    : t === "cupons" ? <Crud tab="coupons" campos={[["codigo", "Código", "t"], ["tipo", "Tipo (percentual ou valor)", "t"], ["valor", "Valor (% ou R$)", "num"], ["minimo", "Pedido mínimo (R$)", "num"], ["validade", "Validade", "date"], ["usos_max", "Limite de usos (vazio = ilimitado)", "num"], ["publico", "Mostrar no app do cliente", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.codigo}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{x.tipo === "percentual" ? x.valor + "%" : brl(x.valor)} · {x.usos} usos{x.usos_max ? "/" + x.usos_max : ""}{x.validade ? " · até " + x.validade.split("-").reverse().join("/") : ""}</div></>} /> : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" cats={sv} campos={[["service_id", "Serviço incluído no plano", "cat"], ["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
     : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Foto", "img"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
     : t === "servicos" ? <Crud tab="services" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço", "num"], ["duracao_min", "Duração (min)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · {x.duracao_min} min</div></>} />
     : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Foto", "img"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
-    : <Crud tab="store_settings" noNew campos={[["nome", "Nome da loja", "t"], ["whatsapp", "WhatsApp (55 + DDD + número)", "t"], ["endereco", "Endereço", "t"], ["abre", "Abre (minutos, 540 = 09:00)", "num"], ["fecha", "Fecha (minutos, 1080 = 18:00)", "num"], ["desconto_app", "Desconto ao agendar pelo app (R$, 0 = sem)", "num"], ["desconto_min", "Desconto vale a partir de (R$)", "num"], ["promo_ate", "Promoção vale até", "date"]]} resumo={(x) => <><b>{x.nome}</b><div className="text-gray-400">WhatsApp: {x.whatsapp || "não definido"}<br />Horário: {x.abre != null ? hhmm(x.abre) + "–" + hhmm(x.fecha) : "não definido"}<br />Toque para editar</div></>} />}</div>;
+    : <Crud tab="store_settings" noNew campos={[["nome", "Nome da loja", "t"], ["whatsapp", "WhatsApp (55 + DDD + número)", "t"], ["endereco", "Endereço", "t"], ["abre", "Abre (minutos, 540 = 09:00)", "num"], ["fecha", "Fecha (minutos, 1080 = 18:00)", "num"], ["desconto_app", "Desconto ao agendar pelo app (R$, 0 = sem)", "num"], ["desconto_min", "Desconto vale a partir de (R$)", "num"], ["promo_ate", "Promoção vale até", "date"], ["selos_meta", "Selos para o prêmio", "num"], ["premio", "Prêmio do cartão fidelidade", "t"]]} resumo={(x) => <><b>{x.nome}</b><div className="text-gray-400">WhatsApp: {x.whatsapp || "não definido"}<br />Horário: {x.abre != null ? hhmm(x.abre) + "–" + hhmm(x.fecha) : "não definido"}<br />Toque para editar</div></>} />}</div>;
 }
 
 function App() {
@@ -385,6 +401,8 @@ function App() {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
     return () => data.subscription.unsubscribe();
   }, []);
+  useEffect(() => { try { const c = new URLSearchParams(location.search).get("ind"); if (c) localStorage.setItem("pb_ind", c); } catch (e) {} }, []);
+  useEffect(() => { if (sessao) try { const c = localStorage.getItem("pb_ind"); if (c) sb.rpc("registrar_indicacao", { c }).then(() => { try { localStorage.removeItem("pb_ind"); } catch (e) {} }); } catch (e) {} }, [sessao?.user?.id]);
   useEffect(() => { if (sessao) sb.from("profiles").select("nome,role").eq("id", sessao.user.id).maybeSingle().then((r) => { setNome(r.data?.nome || ""); setAdmin(r.data?.role === "admin"); }); else { setAdmin(false); setNome(""); } }, [sessao?.user?.id]);
   if (!sb) return <div className="min-h-screen text-white p-6 flex items-center justify-center text-center"><div><img src="logo.png" className="w-48 mx-auto mb-4" /><h1 className="serif text-3xl gt mb-2">Falta configurar o banco</h1><p className="text-gray-400">Rode o <b>schema.sql</b> num projeto Supabase novo e preencha <b>SUPABASE_URL</b> e <b>SUPABASE_KEY</b> no topo do index.html.</p></div></div>;
   if (sessao === undefined) return <div className="min-h-screen text-gray-400 flex items-center justify-center">Carregando...</div>;
