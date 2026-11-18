@@ -121,6 +121,7 @@ function Servicos({ sessao, cfg, onLogin }) {
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Banho e Tosa</h2>
     {cfg?.desconto_app > 0 && (!cfg.promo_ate || iso(new Date()) <= cfg.promo_ate) && <Card className="text-sm"><b className="gt">Agende pelo app e ganhe {brl(cfg.desconto_app)} de desconto</b><br />Vale automaticamente para serviços a partir de {brl(cfg.desconto_min)}{cfg.promo_ate ? ", até " + cfg.promo_ate.split("-").reverse().join("/") : ""}.</Card>}
     {m && <Card className="text-amber-300">{m}</Card>}
+    <Banners destino="galeria" />
     {!sv.length && <p className="text-gray-400">Os serviços ainda serão cadastrados pela loja.</p>}
     {sv.map((x) => <Card key={x.id} onClick={() => { setS(x); setM(""); }} className={`cursor-pointer ${s?.id === x.id ? "!border-[#D4AF37]" : ""}`}><div className="flex justify-between"><b>{x.nome}</b><b className="gt">{brl(x.preco)}</b></div><div className="text-sm text-gray-400">{x.descricao} · {x.duracao_min} min</div></Card>)}
     {s && !sessao && <Btn gold className="w-full" onClick={onLogin}>Entrar para agendar</Btn>}
@@ -168,11 +169,30 @@ function Fidelidade({ sessao }) {
     {cp.length > 0 && <Card><b className="gt">Cupons disponíveis</b>{cp.map((c) => <div key={c.id} className="text-sm py-1 border-b border-white/5"><b>{c.codigo}</b> · {c.tipo === "percentual" ? c.valor + "%" : brl(c.valor)} de desconto{c.minimo > 0 ? ` a partir de ${brl(c.minimo)}` : ""}{c.validade ? ` · até ${c.validade.split("-").reverse().join("/")}` : ""}</div>)}<p className="text-xs text-gray-500 mt-1">Use o código no carrinho.</p></Card>}</div>;
 }
 
+const VAPID_PUBLIC = "BHRFUkP2Dv2vELgd5Mt3pt3G0RD8VAqYui9kwYwM3-U-iB2ugNl4UpqFilUS0KWEB8O3TR5KbvXhncq2Up67UyA"; // chave pública VAPID (a privada fica só no Supabase)
+const b64ToU8 = (b) => { const r = atob((b + "=".repeat((4 - b.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...r].map((c) => c.charCodeAt(0))); };
+function PushCard() {
+  const [st, setSt] = useState(""); if (!VAPID_PUBLIC || !("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  const ativar = async () => { try { if ((await Notification.requestPermission()) !== "granted") return setSt("Permissão negada. Ative as notificações nas configurações do navegador."); const reg = await navigator.serviceWorker.ready; const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC) })); const j = sub.toJSON(); const r = await sb.rpc("salvar_inscricao_push", { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth }); setSt(r.error ? r.error.message : "Avisos ativados neste aparelho."); } catch (e) { setSt("Não foi possível ativar: " + e.message); } };
+  return <Card className="space-y-2"><b className="gt">Notificações</b><p className="text-sm text-gray-400">Receba novidades, promoções e lembretes da Pets Boutique. No iPhone, instale o app na tela inicial antes.</p>{st && <p className="text-sm text-amber-300">{st}</p>}<Btn gold className="w-full" onClick={ativar}>Ativar avisos</Btn></Card>;
+}
+function Banners({ destino }) {
+  const [l, setL] = useState([]); useEffect(() => { sb.from("midias").select("*").eq("ativo", true).eq("destino", destino).order("ordem").then((r) => setL(r.data || [])); }, []);
+  if (!l.length) return null;
+  return <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-1">{l.map((x) => <div key={x.id} className="snap-center shrink-0 w-[85%] relative rounded-2xl overflow-hidden border border-[#D4AF37]/30">{x.tipo === "video" ? <video src={x.url} controls muted playsInline className="w-full aspect-[16/9] object-cover" /> : <img src={x.url} alt={x.titulo || ""} className="w-full aspect-[16/9] object-cover" />}{x.titulo && <div className="absolute bottom-0 inset-x-0 p-3 bg-gradient-to-t from-black/80 to-transparent serif text-xl">{x.titulo}</div>}</div>)}</div>;
+}
+function AvisoApp() {
+  const [a, setA] = useState(null);
+  useEffect(() => { sb.from("avisos").select("*").order("id", { ascending: false }).limit(1).then((r) => { const x = r.data?.[0]; let v = 0; try { v = +localStorage.getItem("pb_aviso") || 0; } catch (e) {} if (x && x.id > v && Date.now() - new Date(x.criado_em) < 14 * 864e5) setA(x); }); }, []);
+  if (!a) return null;
+  return <Card className="!border-[#D4AF37]/50"><b className="gt">{a.titulo}</b><p className="text-sm text-gray-300">{a.texto}</p><button className="text-sm text-gray-400 mt-1" onClick={() => { try { localStorage.setItem("pb_aviso", a.id); } catch (e) {} setA(null); }}>Fechar</button></Card>;
+}
+
 function Conta({ sessao }) {
   const [ped, setPed] = useState([]); const [ag, setAg] = useState([]);
   const ler = () => { sb.from("orders").select("*,order_items(nome,qtd)").eq("user_id", sessao.user.id).order("criado_em", { ascending: false }).then((r) => setPed(r.data || [])); sb.from("appointments").select("*,services(nome),pets(nome)").eq("user_id", sessao.user.id).order("data", { ascending: false }).then((r) => setAg(r.data || [])); };
   useEffect(() => { ler(); }, []);
-  return <div className="space-y-3"><h2 className="serif text-3xl gt">Minha conta</h2><Card>{sessao.user.email}</Card><Fidelidade sessao={sessao} />
+  return <div className="space-y-3"><h2 className="serif text-3xl gt">Minha conta</h2><Card>{sessao.user.email}</Card><Fidelidade sessao={sessao} /><PushCard />
     <h3 className="font-semibold">Pedidos</h3>{!ped.length && <p className="text-gray-400 text-sm">Nenhum pedido ainda.</p>}
     {ped.map((o) => <Card key={o.id}><div className="flex justify-between"><b>#{o.id}</b><span className="gt">{o.status.replace("_", " ")}</span></div><div className="text-sm text-gray-400">{o.order_items.map((i) => `${i.qtd}x ${i.nome}`).join(", ")}</div><b>{brl(o.total)}</b></Card>)}
     <h3 className="font-semibold">Agendamentos</h3>{!ag.length && <p className="text-gray-400 text-sm">Nenhum agendamento.</p>}
@@ -372,16 +392,47 @@ function Caixa() {
     <b>Fechadas</b>{!fechadas.length && <p className="text-sm text-gray-400">Nenhuma.</p>}{fechadas.map((c) => <Card key={c.id} className="text-sm flex justify-between items-center"><span>#{c.numero} · {c.cliente_nome} · {brl(c.total)}</span><button className="gt" onClick={() => recibo(c)}>Recibo PDF</button></Card>)}</div>;
 }
 
+function MidiasAdm() {
+  const [l, setL] = useState([]); const [f, setF] = useState({ destino: "banner", titulo: "" }); const [busy, setBusy] = useState(false); const [m, setM] = useState("");
+  const ler = () => sb.from("midias").select("*").order("destino").order("ordem").order("criado_em", { ascending: false }).then((r) => setL(r.data || []));
+  useEffect(() => { ler(); }, []);
+  const enviar = async (e) => { const fl = e.target.files[0]; if (!fl) return; setBusy(true); setM(""); const video = fl.type.startsWith("video"); const cam = `midias/${Date.now()}-${fl.name.replace(/[^\w.]/g, "_")}`;
+    const up = await sb.storage.from("fotos").upload(cam, fl, { contentType: fl.type }); if (up.error) { setBusy(false); return setM(up.error.message); }
+    const r = await sb.from("midias").insert({ tipo: video ? "video" : "foto", destino: f.destino, url: sb.storage.from("fotos").getPublicUrl(cam).data.publicUrl, caminho: cam, titulo: f.titulo.trim() || null, ordem: l.filter((x) => x.destino === f.destino).length });
+    setBusy(false); e.target.value = ""; if (r.error) { await sb.storage.from("fotos").remove([cam]); return setM(r.error.message); } setF({ ...f, titulo: "" }); ler(); };
+  const mover = async (x, d) => { const g = l.filter((y) => y.destino === x.destino); const i = g.findIndex((y) => y.id === x.id); const j = i + d; if (j < 0 || j >= g.length) return; const a = [...g]; [a[i], a[j]] = [a[j], a[i]]; await Promise.all(a.map((y, k) => sb.from("midias").update({ ordem: k }).eq("id", y.id))); ler(); };
+  return <div className="space-y-3"><Card className="space-y-2"><b>Nova mídia</b>
+    <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15" value={f.destino} onChange={(e) => setF({ ...f, destino: e.target.value })}><option value="banner">Banner da tela inicial</option><option value="galeria">Galeria de Banho e Tosa</option></select>
+    <Inp placeholder="Título (opcional)" value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })} />
+    <input type="file" accept="image/*,video/*" disabled={busy} className="text-sm" onChange={enviar} />{busy && <p className="text-sm text-gray-400">Enviando...</p>}{m && <p className="text-sm text-amber-300">{m}</p>}<p className="text-xs text-gray-500">Fotos até 2 MB e vídeos curtos (até 50 MB). Proporção ideal: 16:9.</p></Card>
+    {l.map((x) => <Card key={x.id} className="flex items-center gap-3 text-sm">{x.tipo === "video" ? <video src={x.url} className="w-20 h-14 object-cover rounded-lg" /> : <img src={x.url} className="w-20 h-14 object-cover rounded-lg" />}
+      <div className="flex-1"><b>{x.titulo || "Sem título"}</b>{x.ativo ? "" : " (oculto)"}<div className="text-gray-400">{x.destino === "banner" ? "Banner" : "Galeria"}</div></div>
+      <div className="flex gap-1"><button className="w-10 h-10" onClick={() => mover(x, -1)}>↑</button><button className="w-10 h-10" onClick={() => mover(x, 1)}>↓</button></div>
+      <div className="flex flex-col gap-1"><button className="gt" onClick={async () => { await sb.from("midias").update({ ativo: !x.ativo }).eq("id", x.id); ler(); }}>{x.ativo ? "Ocultar" : "Exibir"}</button><button className="text-red-400" onClick={async () => { if (confirm("Excluir esta mídia?")) { if (x.caminho) await sb.storage.from("fotos").remove([x.caminho]); await sb.from("midias").delete().eq("id", x.id); ler(); } }}>Excluir</button></div></Card>)}</div>;
+}
+function AvisosAdm() {
+  const [l, setL] = useState([]); const [f, setF] = useState({ titulo: "", texto: "", push: false }); const [m, setM] = useState(""); const [busy, setBusy] = useState(false);
+  const ler = () => sb.from("avisos").select("*").order("id", { ascending: false }).limit(20).then((r) => setL(r.data || []));
+  useEffect(() => { ler(); }, []);
+  const enviar = async () => { setBusy(true); setM(""); const r = await sb.from("avisos").insert({ titulo: f.titulo.trim(), texto: f.texto.trim() || null }); if (r.error) { setBusy(false); return setM(r.error.message); }
+    if (f.push) { const p = await sb.functions.invoke("enviar-push", { body: { titulo: f.titulo.trim(), texto: f.texto.trim() } }); setM(p.error ? "Aviso publicado no app. O push não foi enviado: o envio de notificações ainda não está configurado." : `Aviso publicado e push enviado a ${p.data?.enviados ?? 0} aparelho(s).`); } else setM("Aviso publicado no app.");
+    setBusy(false); setF({ titulo: "", texto: "", push: false }); ler(); };
+  return <div className="space-y-3"><Card className="space-y-2"><b>Novo aviso</b><Inp placeholder="Título" value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })} /><Inp placeholder="Mensagem" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+    <label className="flex items-center gap-3 text-sm"><input type="checkbox" className="w-5 h-5" checked={f.push} onChange={(e) => setF({ ...f, push: e.target.checked })} />Enviar também como notificação push</label>{m && <p className="text-sm text-amber-300">{m}</p>}
+    <Btn gold className="w-full" disabled={!f.titulo.trim() || busy} onClick={enviar}>Publicar aviso</Btn></Card>
+    <b>Avisos publicados</b>{!l.length && <p className="text-sm text-gray-400">Nenhum aviso.</p>}{l.map((a) => <Card key={a.id} className="text-sm flex justify-between gap-2"><div><b>{a.titulo}</b><div className="text-gray-400">{a.texto}</div></div><button className="text-red-400" onClick={async () => { await sb.from("avisos").delete().eq("id", a.id); ler(); }}>Excluir</button></Card>)}</div>;
+}
+
 function Admin() {
   const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]); const [eq, setEq] = useState([]); const [sv, setSv] = useState([]);
   useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); sb.from("staff").select("id,nome").order("nome").then((r) => setEq(r.data || [])); sb.from("services").select("id,nome").order("nome").then((r) => setSv(r.data || [])); }, [t]);
-  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["caixa", "Caixa"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["equipe", "Equipe e bloqueios"], ["planos", "Planos"], ["cupons", "Cupons"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
+  const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["caixa", "Caixa"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["equipe", "Equipe e bloqueios"], ["planos", "Planos"], ["cupons", "Cupons"], ["midias", "Mídias"], ["avisos", "Avisos"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
   const off = (x) => x.ativo === false ? " (inativo)" : "";
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Painel</h2>
     <div className="flex gap-2 overflow-x-auto pb-1">{abas.map(([id, l]) => <button key={id} onClick={() => setT(id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${t === id ? "gold border-transparent" : "border-white/20"}`}>{l}</button>)}</div>
     {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm /> : t === "caixa" ? <Caixa /> 
     : t === "equipe" ? <><b>Profissionais</b><Crud tab="staff" campos={[["nome", "Nome", "t"], ["comissao_pct", "Comissão (%)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">Comissão {x.comissao_pct}%</div></>} /><b className="block pt-2">Bloqueios de agenda</b><Crud tab="blocks" cats={eq} campos={[["data", "Data", "date"], ["hora_ini", "Início (minutos; vazio = dia todo)", "num"], ["hora_fim", "Fim (minutos; vazio = dia todo)", "num"], ["staff_id", "Profissional (vazio = todos)", "cat"], ["motivo", "Motivo", "t"]]} resumo={(x) => <><b>{x.data.split("-").reverse().join("/")}</b> · {x.hora_ini != null ? hhmm(x.hora_ini) + "–" + hhmm(x.hora_fim) : "dia todo"} · {eq.find((e) => e.id === x.staff_id)?.nome || "todos"}<div className="text-gray-400">{x.motivo}</div></>} /></>
-    : t === "cupons" ? <Crud tab="coupons" campos={[["codigo", "Código", "t"], ["tipo", "Tipo (percentual ou valor)", "t"], ["valor", "Valor (% ou R$)", "num"], ["minimo", "Pedido mínimo (R$)", "num"], ["validade", "Validade", "date"], ["usos_max", "Limite de usos (vazio = ilimitado)", "num"], ["publico", "Mostrar no app do cliente", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.codigo}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{x.tipo === "percentual" ? x.valor + "%" : brl(x.valor)} · {x.usos} usos{x.usos_max ? "/" + x.usos_max : ""}{x.validade ? " · até " + x.validade.split("-").reverse().join("/") : ""}</div></>} /> : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" cats={sv} campos={[["service_id", "Serviço incluído no plano", "cat"], ["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
+    : t === "midias" ? <MidiasAdm /> : t === "avisos" ? <AvisosAdm /> : t === "cupons" ? <Crud tab="coupons" campos={[["codigo", "Código", "t"], ["tipo", "Tipo (percentual ou valor)", "t"], ["valor", "Valor (% ou R$)", "num"], ["minimo", "Pedido mínimo (R$)", "num"], ["validade", "Validade", "date"], ["usos_max", "Limite de usos (vazio = ilimitado)", "num"], ["publico", "Mostrar no app do cliente", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.codigo}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{x.tipo === "percentual" ? x.valor + "%" : brl(x.valor)} · {x.usos} usos{x.usos_max ? "/" + x.usos_max : ""}{x.validade ? " · até " + x.validade.split("-").reverse().join("/") : ""}</div></>} /> : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" cats={sv} campos={[["service_id", "Serviço incluído no plano", "cat"], ["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
     : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Foto", "img"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
     : t === "servicos" ? <Crud tab="services" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço", "num"], ["duracao_min", "Duração (min)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · {x.duracao_min} min</div></>} />
     : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Foto", "img"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
@@ -418,6 +469,7 @@ function App() {
     <main className="p-4 space-y-4">
       {priv ? <Auth /> : aba === "inicio" ? <div className="space-y-4">
         <h1 className="serif text-4xl">{nome ? `Olá, ${nome.split(" ")[0]}` : "Bem-vindo"} <span className="gt">à Pets Boutique</span></h1>
+        <AvisoApp /><Banners destino="banner" />
         <Btn gold className="w-full" onClick={() => setAba("loja")}>Explorar a loja</Btn>
         <Btn className="w-full" onClick={() => setAba("servicos")}>Agendar banho e tosa</Btn>
         {cfg?.whatsapp && <a className="block" href={`https://wa.me/${String(cfg.whatsapp).replace(/\D/g, "")}`} target="_blank"><Btn className="w-full">Atendimento pelo WhatsApp</Btn></a>}
