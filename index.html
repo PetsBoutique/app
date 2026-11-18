@@ -21,7 +21,7 @@
 <script type="text/babel">
 const { useState, useEffect } = React;
 /* ===== CONFIGURAÇÃO (preencher com os dados da Pets Boutique) ===== */
-const CFG = { SUPABASE_URL: "", SUPABASE_KEY: "" }; // projeto Supabase NOVO + chave pública (publishable/anon). Nunca a secreta.
+const CFG = { SUPABASE_URL: "https://cqluzaagggawvikppite.supabase.co", SUPABASE_KEY: "sb_publishable_FqLq0A0ebF38CQzZiI6d6w_-dv9LDW-" }; // projeto Supabase NOVO + chave pública (publishable/anon). Nunca a secreta.
 const sb = CFG.SUPABASE_URL ? supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY) : null;
 const brl = (v) => "R$ " + Number(v || 0).toFixed(2).replace(".", ",");
 const pr = (p) => p.preco_promo ?? p.preco;
