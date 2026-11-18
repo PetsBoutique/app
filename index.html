@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0B0B0B" />
+<title>Pets Boutique</title>
+<link rel="icon" href="logo.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.min.js"></script>
+<style>html,body{background:#0B0B0B;margin:0;font-family:Inter,system-ui,sans-serif}.serif{font-family:'Cormorant Garamond',serif}
+.gold{background:linear-gradient(180deg,#EBCB6E,#B8912F);color:#111}.gt{color:#D4AF37}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+/* ===== CONFIGURAÇÃO (preencher com os dados da Pets Boutique) ===== */
+const CFG = { SUPABASE_URL: "", SUPABASE_KEY: "" }; // projeto Supabase NOVO + chave pública (publishable/anon). Nunca a secreta.
+const sb = CFG.SUPABASE_URL ? supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY) : null;
+const brl = (v) => "R$ " + Number(v || 0).toFixed(2).replace(".", ",");
+const pr = (p) => p.preco_promo ?? p.preco;
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const iso = (d) => d.toLocaleDateString("sv-SE");
+const MSG = { login_necessario: "Entre na sua conta para continuar.", horario_ocupado: "Esse horário acabou de ser ocupado. Escolha outro.", carrinho_vazio: "Carrinho vazio." };
+const erro = (e) => { const m = e?.message || ""; if (m.startsWith("sem_estoque")) return "Sem estoque suficiente: " + m.split(":")[1]; if (m.startsWith("exige_receita")) return "Medicamento com receita: peça pelo atendimento da loja (" + m.split(":")[1] + ")."; return MSG[m] || m || "Erro inesperado"; };
+
+const Btn = ({ gold, className = "", ...p }) => <button {...p} className={`min-h-[48px] px-5 rounded-xl font-semibold active:scale-95 transition disabled:opacity-40 ${gold ? "gold" : "bg-[#222] text-gray-100 border border-white/10"} ${className}`} />;
+const Card = ({ className = "", ...p }) => <div {...p} className={`bg-[#161616] border border-white/10 rounded-2xl p-4 ${className}`} />;
+const Inp = (p) => <input {...p} className={`w-full min-h-[48px] px-4 rounded-xl bg-[#111] border border-white/15 text-white ${p.className || ""}`} />;
+const Foto = ({ src, nome }) => src ? <img src={src} alt={nome} className="w-full aspect-square object-cover rounded-xl" /> : <div className="w-full aspect-square rounded-xl bg-[#0f0f0f] border border-[#D4AF37]/30 flex items-center justify-center serif text-4xl gt">{(nome || "?")[0]}</div>;
+
+function Auth() {
+  const [modo, setModo] = useState("entrar"); const [f, setF] = useState({ email: "", senha: "", nome: "" }); const [m, setM] = useState("");
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const ir = async () => {
+    setM("");
+    if (modo === "recuperar") { const r = await sb.auth.resetPasswordForEmail(f.email, { redirectTo: location.href.split("#")[0] }); return setM(r.error ? r.error.message : "Enviamos o link para o seu e-mail."); }
+    const r = modo === "entrar" ? await sb.auth.signInWithPassword({ email: f.email, password: f.senha }) : await sb.auth.signUp({ email: f.email, password: f.senha, options: { data: { nome: f.nome } } });
+    if (r.error) setM(r.error.message); else if (modo === "criar" && !r.data.session) setM("Conta criada. Confirme o e-mail para entrar.");
+  };
+  return <Card className="space-y-3"><h2 className="serif text-3xl gt">{modo === "entrar" ? "Entrar" : modo === "criar" ? "Criar conta" : "Recuperar senha"}</h2>
+    {modo === "criar" && <Inp placeholder="Seu nome" value={f.nome} onChange={set("nome")} />}
+    <Inp type="email" placeholder="E-mail" value={f.email} onChange={set("email")} />
+    {modo !== "recuperar" && <Inp type="password" placeholder="Senha (mín. 6)" value={f.senha} onChange={set("senha")} />}
+    {m && <p className="text-sm text-amber-300">{m}</p>}
+    <Btn gold className="w-full" onClick={ir}>{modo === "entrar" ? "Entrar" : modo === "criar" ? "Cadastrar" : "Enviar link"}</Btn>
+    <div className="flex justify-between text-sm text-gray-400"><button onClick={() => setModo(modo === "entrar" ? "criar" : "entrar")}>{modo === "entrar" ? "Criar conta" : "Já tenho conta"}</button><button onClick={() => setModo("recuperar")}>Esqueci a senha</button></div></Card>;
+}
+
+function Loja({ cats, prods, add, busca0 = "" }) {
+  const [q, setQ] = useState(busca0); const [cat, setCat] = useState(null); const [ord, setOrd] = useState("");
+  const filhas = (id) => [id, ...cats.filter((c) => c.parent_id === id).map((c) => c.id)];
+  let l = prods.filter((p) => (!cat || filhas(cat).includes(p.categoria_id)) && (p.nome + " " + (p.marca || "")).toLowerCase().includes(q.toLowerCase()));
+  if (ord) l = [...l].sort((a, b) => (pr(a) - pr(b)) * (ord === "asc" ? 1 : -1));
+  return <div className="space-y-3"><Inp placeholder="Buscar produtos" value={q} onChange={(e) => setQ(e.target.value)} />
+    <div className="flex gap-2 overflow-x-auto pb-1">{[{ id: null, nome: "Todos" }, ...cats.filter((c) => !c.parent_id)].map((c) => <button key={c.id} onClick={() => setCat(c.id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${cat === c.id ? "gold border-transparent" : "border-white/20 text-gray-200"}`}>{c.nome}</button>)}</div>
+    <select className="min-h-[44px] px-3 rounded-xl bg-[#111] border border-white/15" value={ord} onChange={(e) => setOrd(e.target.value)}><option value="">Ordenar</option><option value="asc">Menor preço</option><option value="desc">Maior preço</option></select>
+    {!l.length && <p className="text-gray-400">Nenhum produto encontrado. A loja ainda pode estar cadastrando o catálogo.</p>}
+    <div className="grid grid-cols-2 gap-3">{l.map((p) => <Card key={p.id} className="!p-3 flex flex-col gap-2"><Foto src={p.imagem} nome={p.nome} />
+      <div className="text-sm leading-tight">{p.nome}<div className="text-xs text-gray-400">{p.marca}</div></div>
+      <div>{p.preco_promo != null && <s className="text-xs text-gray-500 mr-1">{brl(p.preco)}</s>}<b className="gt">{brl(pr(p))}</b></div>
+      {p.exige_receita && <div className="text-xs text-amber-300">Exige receita: peça pelo WhatsApp</div>}
+      <Btn gold disabled={p.estoque < 1 || p.exige_receita} onClick={() => add(p)} className="!min-h-[44px]">{p.estoque < 1 ? "Indisponível" : "Adicionar"}</Btn></Card>)}</div></div>;
+}
+
+function Carrinho({ itens, prods, mudar, limpar, sessao, cfg, onLogin }) {
+  const [ent, setEnt] = useState("retirada"); const [end, setEnd] = useState(""); const [busy, setBusy] = useState(false); const [m, setM] = useState("");
+  const lin = itens.map((i) => ({ ...i, p: prods.find((p) => p.id === i.id) })).filter((i) => i.p);
+  const sub = lin.reduce((t, i) => t + i.q * pr(i.p), 0);
+  const criar = async (canal) => {
+    if (!sessao) return onLogin(); if (ent === "entrega" && !end.trim()) return setM("Informe o endereço de entrega.");
+    setBusy(true); setM("");
+    const r = await sb.rpc("criar_pedido", { itens: itens.map((i) => ({ id: i.id, q: i.q })), canal, entrega: ent, endereco: end || null });
+    setBusy(false); if (r.error) return setM(erro(r.error));
+    const { id, total } = r.data;
+    if (canal === "whatsapp") {
+      if (!cfg?.whatsapp) { setM(`Pedido #${id} registrado, mas o WhatsApp da loja ainda não foi configurado.`); return limpar(); }
+      const t = `Olá! Pedido #${id} (Pets Boutique)\nCliente: ${sessao.user.user_metadata?.nome || sessao.user.email}\n` + lin.map((i) => `• ${i.q}x ${i.p.nome} — ${brl(i.q * pr(i.p))}`).join("\n") + `\nTotal: ${brl(total)}\n${ent === "entrega" ? "Entrega: " + end : "Retirada na loja"}`;
+      limpar(); window.open(`https://wa.me/${String(cfg.whatsapp).replace(/\D/g, "")}?text=${encodeURIComponent(t)}`, "_blank");
+    } else {
+      const c = await sb.functions.invoke("pagbank-cobranca", { body: { order_id: id } });
+      if (c.error || !c.data?.link) { setM(`Pedido #${id} registrado como "aguardando pagamento". A cobrança PagBank ainda não está configurada; nenhum pagamento foi gerado.`); return limpar(); }
+      limpar(); location.href = c.data.link;
+    }
+  };
+  if (!lin.length) return <p className="text-gray-400">{m || "Seu carrinho está vazio."}</p>;
+  return <div className="space-y-3">{lin.map((i) => <Card key={i.id} className="flex items-center gap-3"><div className="flex-1 text-sm">{i.p.nome}<div className="gt">{brl(pr(i.p))}</div></div>
+    <Btn className="!min-w-[44px] !px-0" onClick={() => mudar(i.id, -1)}>−</Btn><b>{i.q}</b><Btn className="!min-w-[44px] !px-0" onClick={() => mudar(i.id, 1)}>+</Btn></Card>)}
+    <div className="flex justify-between text-lg"><span>Subtotal</span><b className="gt">{brl(sub)}</b></div>
+    <p className="text-xs text-gray-400">O total final é calculado e conferido pelo servidor. Frete a combinar com a loja.</p>
+    <div className="grid grid-cols-2 gap-2">{["retirada", "entrega"].map((e) => <Btn key={e} gold={ent === e} onClick={() => setEnt(e)}>{e === "retirada" ? "Retirar na loja" : "Entrega"}</Btn>)}</div>
+    {ent === "entrega" && <Inp placeholder="Endereço completo" value={end} onChange={(e) => setEnd(e.target.value)} />}
+    {m && <p className="text-sm text-amber-300">{m}</p>}
+    <Btn gold className="w-full" disabled={busy} onClick={() => criar("app")}>Pagar no app (PagBank)</Btn>
+    <Btn className="w-full" disabled={busy} onClick={() => criar("whatsapp")}>Finalizar pelo WhatsApp</Btn></div>;
+}
+
+function Servicos({ sessao, cfg, onLogin }) {
+  const [sv, setSv] = useState([]); const [pets, setPets] = useState([]); const [pet, setPet] = useState(""); const [s, setS] = useState(null);
+  const [dia, setDia] = useState(null); const [oc, setOc] = useState([]); const [h, setH] = useState(null); const [obs, setObs] = useState(""); const [m, setM] = useState("");
+  useEffect(() => { sb.from("services").select("*").eq("ativo", true).order("nome").then((r) => setSv(r.data || [])); if (sessao) sb.from("pets").select("id,nome").then((r) => setPets(r.data || [])); }, [sessao]);
+  useEffect(() => { setH(null); if (dia) sb.rpc("ocupados", { d: iso(dia) }).then((r) => setOc(r.data || [])); }, [dia]);
+  const dias = Array.from({ length: 14 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return d; });
+  const slots = []; if (s && cfg?.abre != null) for (let t = cfg.abre; t + s.duracao_min <= cfg.fecha; t += 30) slots.push(t);
+  const livre = (t) => !oc.some((o) => t < o.fim && t + s.duracao_min > o.inicio);
+  const ok = async () => {
+    const r = await sb.rpc("agendar", { p_pet: +pet, p_serv: s.id, p_data: iso(dia), p_inicio: h, p_obs: obs || null });
+    if (r.error) { setM(erro(r.error)); return sb.rpc("ocupados", { d: iso(dia) }).then((x) => setOc(x.data || [])); }
+    setM("Agendamento confirmado!"); setS(null); setDia(null); setH(null);
+  };
+  return <div className="space-y-3"><h2 className="serif text-3xl gt">Banho e Tosa</h2>
+    {m && <Card className="text-amber-300">{m}</Card>}
+    {!sv.length && <p className="text-gray-400">Os serviços ainda serão cadastrados pela loja.</p>}
+    {sv.map((x) => <Card key={x.id} onClick={() => { setS(x); setM(""); }} className={`cursor-pointer ${s?.id === x.id ? "!border-[#D4AF37]" : ""}`}><div className="flex justify-between"><b>{x.nome}</b><b className="gt">{brl(x.preco)}</b></div><div className="text-sm text-gray-400">{x.descricao} · {x.duracao_min} min</div></Card>)}
+    {s && !sessao && <Btn gold className="w-full" onClick={onLogin}>Entrar para agendar</Btn>}
+    {s && sessao && <>
+      {!pets.length ? <p className="text-amber-300 text-sm">Cadastre um pet em “Meus Pets” antes de agendar.</p> :
+        <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15" value={pet} onChange={(e) => setPet(e.target.value)}><option value="">Escolha o pet</option>{pets.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}</select>}
+      <div className="flex gap-2 overflow-x-auto">{dias.map((d) => <button key={iso(d)} onClick={() => setDia(d)} className={`shrink-0 w-16 min-h-[56px] rounded-xl border ${dia && iso(dia) === iso(d) ? "gold" : "border-white/20"}`}>{d.toLocaleDateString("pt-BR", { weekday: "short" })}<br />{d.getDate()}</button>)}</div>
+      {dia && !slots.length && <p className="text-sm text-amber-300">Horários de funcionamento ainda não configurados pela loja.</p>}
+      {dia && <div className="grid grid-cols-4 gap-2">{slots.map((t) => <button key={t} disabled={!livre(t)} onClick={() => setH(t)} className={`min-h-[44px] rounded-xl border disabled:opacity-25 ${h === t ? "gold" : "border-white/20"}`}>{hhmm(t)}</button>)}</div>}
+      <Inp placeholder="Observações (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} />
+      <Btn gold className="w-full" disabled={!pet || !dia || h == null} onClick={ok}>Confirmar agendamento</Btn></>}</div>;
+}
+
+function Pets({ sessao }) {
+  const vazio = { nome: "", especie: "Cão", raca: "", nascimento: "", peso: "", obs: "" };
+  const [l, setL] = useState([]); const [f, setF] = useState(vazio); const [m, setM] = useState("");
+  const ler = () => sb.from("pets").select("*").order("nome").then((r) => setL(r.data || []));
+  useEffect(() => { ler(); }, []);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const salvar = async () => {
+    if (!f.nome.trim()) return setM("Informe o nome do pet.");
+    const r = await sb.from("pets").insert({ nome: f.nome.trim(), especie: f.especie, raca: f.raca || null, nascimento: f.nascimento || null, peso: f.peso ? +f.peso : null, obs: f.obs || null });
+    if (r.error) return setM(r.error.message); setF(vazio); setM(""); ler();
+  };
+  return <div className="space-y-3"><h2 className="serif text-3xl gt">Meus Pets</h2>
+    {l.map((p) => <Card key={p.id}><b>{p.nome}</b> · {p.especie}{p.raca ? ` · ${p.raca}` : ""}<div className="text-sm text-gray-400">{p.peso ? p.peso + " kg · " : ""}{p.obs}</div>
+      <button className="text-sm text-red-400 mt-1" onClick={async () => { if (confirm(`Remover ${p.nome}?`)) { await sb.from("pets").delete().eq("id", p.id); ler(); } }}>Remover</button></Card>)}
+    <Card className="space-y-2"><b>Adicionar pet</b><Inp placeholder="Nome" value={f.nome} onChange={set("nome")} />
+      <select className="w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15" value={f.especie} onChange={set("especie")}>{["Cão", "Gato", "Ave", "Roedor", "Peixe", "Outro"].map((e) => <option key={e}>{e}</option>)}</select>
+      <Inp placeholder="Raça" value={f.raca} onChange={set("raca")} /><Inp type="date" value={f.nascimento} onChange={set("nascimento")} /><Inp type="number" placeholder="Peso (kg)" value={f.peso} onChange={set("peso")} /><Inp placeholder="Observações" value={f.obs} onChange={set("obs")} />
+      {m && <p className="text-sm text-amber-300">{m}</p>}<Btn gold className="w-full" onClick={salvar}>Salvar pet</Btn></Card></div>;
+}
+
+function Conta({ sessao }) {
+  const [ped, setPed] = useState([]); const [ag, setAg] = useState([]);
+  const ler = () => { sb.from("orders").select("*,order_items(nome,qtd)").order("criado_em", { ascending: false }).then((r) => setPed(r.data || [])); sb.from("appointments").select("*,services(nome),pets(nome)").order("data", { ascending: false }).then((r) => setAg(r.data || [])); };
+  useEffect(() => { ler(); }, []);
+  return <div className="space-y-3"><h2 className="serif text-3xl gt">Minha conta</h2><Card>{sessao.user.email}</Card>
+    <h3 className="font-semibold">Pedidos</h3>{!ped.length && <p className="text-gray-400 text-sm">Nenhum pedido ainda.</p>}
+    {ped.map((o) => <Card key={o.id}><div className="flex justify-between"><b>#{o.id}</b><span className="gt">{o.status.replace("_", " ")}</span></div><div className="text-sm text-gray-400">{o.order_items.map((i) => `${i.qtd}x ${i.nome}`).join(", ")}</div><b>{brl(o.total)}</b></Card>)}
+    <h3 className="font-semibold">Agendamentos</h3>{!ag.length && <p className="text-gray-400 text-sm">Nenhum agendamento.</p>}
+    {ag.map((a) => <Card key={a.id}><b>{a.services?.nome}</b> · {a.pets?.nome}<div className="text-sm text-gray-400">{a.data.split("-").reverse().join("/")} às {hhmm(a.inicio)} · {a.status}</div>
+      {a.status === "agendado" && <button className="text-sm text-red-400" onClick={async () => { if (confirm("Cancelar este agendamento?")) { await sb.rpc("cancelar_agendamento", { p_id: a.id }); ler(); } }}>Cancelar</button>}</Card>)}
+    <Btn className="w-full" onClick={() => sb.auth.signOut()}>Sair</Btn></div>;
+}
+
+function App() {
+  const [sessao, setSessao] = useState(undefined); const [aba, setAba] = useState("inicio"); const [cfg, setCfg] = useState(null);
+  const [cats, setCats] = useState([]); const [prods, setProds] = useState([]); const [cart, setCart] = useState([]); const [nome, setNome] = useState("");
+  useEffect(() => {
+    if (!sb) return;
+    sb.auth.getSession().then(({ data }) => setSessao(data.session));
+    const { data } = sb.auth.onAuthStateChange((_e, s) => setSessao(s)); 
+    sb.from("store_settings").select("*").maybeSingle().then((r) => setCfg(r.data));
+    sb.from("categories").select("*").eq("ativo", true).order("ordem").then((r) => setCats(r.data || []));
+    sb.from("products").select("*").eq("ativo", true).order("nome").then((r) => setProds(r.data || []));
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+    return () => data.subscription.unsubscribe();
+  }, []);
+  useEffect(() => { if (sessao) sb.from("profiles").select("nome").maybeSingle().then((r) => setNome(r.data?.nome || "")); }, [sessao?.user?.id]);
+  if (!sb) return <div className="min-h-screen text-white p-6 flex items-center justify-center text-center"><div><img src="logo.png" className="w-48 mx-auto mb-4" /><h1 className="serif text-3xl gt mb-2">Falta configurar o banco</h1><p className="text-gray-400">Rode o <b>schema.sql</b> num projeto Supabase novo e preencha <b>SUPABASE_URL</b> e <b>SUPABASE_KEY</b> no topo do index.html.</p></div></div>;
+  if (sessao === undefined) return <div className="min-h-screen text-gray-400 flex items-center justify-center">Carregando...</div>;
+  const add = (p) => setCart((c) => c.some((i) => i.id === p.id) ? c.map((i) => i.id === p.id ? { ...i, q: i.q + 1 } : i) : [...c, { id: p.id, q: 1 }]);
+  const mudar = (id, d) => setCart((c) => c.map((i) => i.id === id ? { ...i, q: i.q + d } : i).filter((i) => i.q > 0));
+  const n = cart.reduce((t, i) => t + i.q, 0);
+  const login = () => setAba("conta");
+  const tabs = [["inicio", "Início"], ["loja", "Loja"], ["servicos", "Banho e Tosa"], ["pets", "Meus Pets"], ["conta", "Conta"]];
+  const priv = ["pets", "conta"].includes(aba) && !sessao;
+  return <div className="min-h-screen text-gray-100 pb-24 max-w-2xl mx-auto">
+    <header className="p-4 flex items-center justify-between border-b border-[#D4AF37]/20"><img src="logo.png" alt="Pets Boutique" className="h-16 w-16 object-contain rounded-full" />
+      <Btn className="relative" onClick={() => setAba("carrinho")}>Carrinho{n > 0 && <span className="ml-2 gold rounded-full px-2 text-sm">{n}</span>}</Btn></header>
+    <main className="p-4 space-y-4">
+      {priv ? <Auth /> : aba === "inicio" ? <div className="space-y-4">
+        <h1 className="serif text-4xl">{nome ? `Olá, ${nome.split(" ")[0]}` : "Bem-vindo"} <span className="gt">à Pets Boutique</span></h1>
+        <Btn gold className="w-full" onClick={() => setAba("loja")}>Explorar a loja</Btn>
+        <Btn className="w-full" onClick={() => setAba("servicos")}>Agendar banho e tosa</Btn>
+        {cfg?.whatsapp && <a className="block" href={`https://wa.me/${String(cfg.whatsapp).replace(/\D/g, "")}`} target="_blank"><Btn className="w-full">Atendimento pelo WhatsApp</Btn></a>}
+        {prods.some((p) => p.destaque) && <><h2 className="serif text-2xl gt">Em destaque</h2><Loja cats={[]} prods={prods.filter((p) => p.destaque)} add={add} /></>}</div>
+      : aba === "loja" ? <Loja cats={cats} prods={prods} add={add} />
+      : aba === "servicos" ? <Servicos sessao={sessao} cfg={cfg} onLogin={login} />
+      : aba === "pets" ? <Pets sessao={sessao} />
+      : aba === "carrinho" ? <Carrinho itens={cart} prods={prods} mudar={mudar} limpar={() => setCart([])} sessao={sessao} cfg={cfg} onLogin={login} />
+      : aba === "conta" ? (sessao ? <Conta sessao={sessao} /> : <Auth />) : null}
+    </main>
+    <nav className="fixed bottom-0 inset-x-0 max-w-2xl mx-auto bg-[#0f0f0f] border-t border-[#D4AF37]/25 flex">{tabs.map(([id, l]) => <button key={id} onClick={() => setAba(id)} className={`flex-1 min-h-[56px] text-xs ${aba === id ? "gt font-semibold" : "text-gray-400"}`}>{l}</button>)}</nav></div>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
