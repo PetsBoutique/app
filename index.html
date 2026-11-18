@@ -114,9 +114,10 @@ function Servicos({ sessao, cfg, onLogin }) {
   const ok = async () => {
     const r = await sb.rpc("agendar", { p_pet: +pet, p_serv: s.id, p_data: iso(dia), p_inicio: h, p_obs: obs || null, p_staff: +prof });
     if (r.error) { setM(erro(r.error)); return sb.rpc("ocupados", { d: iso(dia), p_staff: +prof }).then((x) => setOc(x.data || [])); }
-    setM("Agendamento confirmado!"); setS(null); setDia(null); setH(null);
+    setM(r.data?.plano ? "Agendamento confirmado! Banho incluso no seu plano." : "Agendamento confirmado! Valor: " + brl(r.data?.preco) + (r.data?.desconto > 0 ? ` (desconto de ${brl(r.data.desconto)} aplicado)` : "")); setS(null); setDia(null); setH(null);
   };
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Banho e Tosa</h2>
+    {cfg?.desconto_app > 0 && (!cfg.promo_ate || iso(new Date()) <= cfg.promo_ate) && <Card className="text-sm"><b className="gt">Agende pelo app e ganhe {brl(cfg.desconto_app)} de desconto</b><br />Vale automaticamente para serviços a partir de {brl(cfg.desconto_min)}{cfg.promo_ate ? ", até " + cfg.promo_ate.split("-").reverse().join("/") : ""}.</Card>}
     {m && <Card className="text-amber-300">{m}</Card>}
     {!sv.length && <p className="text-gray-400">Os serviços ainda serão cadastrados pela loja.</p>}
     {sv.map((x) => <Card key={x.id} onClick={() => { setS(x); setM(""); }} className={`cursor-pointer ${s?.id === x.id ? "!border-[#D4AF37]" : ""}`}><div className="flex justify-between"><b>{x.nome}</b><b className="gt">{brl(x.preco)}</b></div><div className="text-sm text-gray-400">{x.descricao} · {x.duracao_min} min</div></Card>)}
@@ -129,7 +130,7 @@ function Servicos({ sessao, cfg, onLogin }) {
       {dia && !slots.length && <p className="text-sm text-amber-300">Horários de funcionamento ainda não configurados pela loja.</p>}
       {dia && <div className="grid grid-cols-4 gap-2">{slots.map((t) => <button key={t} disabled={!livre(t)} onClick={() => setH(t)} className={`min-h-[44px] rounded-xl border disabled:opacity-25 ${h === t ? "gold" : "border-white/20"}`}>{hhmm(t)}</button>)}</div>}
       <Inp placeholder="Observações (opcional)" value={obs} onChange={(e) => setObs(e.target.value)} />
-      <Btn gold className="w-full" disabled={!pet || !prof || !dia || h == null} onClick={ok}>Confirmar agendamento</Btn></>}<Planos sessao={sessao} onLogin={onLogin} /></div>;
+      <Btn gold className="w-full" disabled={!pet || !prof || !dia || h == null} onClick={ok}>Confirmar agendamento</Btn></>}<Planos sessao={sessao} onLogin={onLogin} cfg={cfg} /></div>;
 }
 
 function Pets({ sessao }) {
@@ -264,24 +265,40 @@ function Relatorios() {
       <p className="text-xs text-gray-500">Forma de pagamento e despesas ainda não são registradas pelo app.</p></>}</div>;
 }
 
-function Planos({ sessao, onLogin }) {
-  const [pl, setPl] = useState([]); const [mi, setMi] = useState(null); const [m, setM] = useState("");
-  const ler = () => { sb.from("plans").select("*").eq("ativo", true).order("preco").then((r) => setPl(r.data || [])); if (sessao) sb.from("subscriptions").select("*,plans(nome,banhos_mes)").eq("user_id", sessao.user.id).in("status", ["aguardando_pagamento", "ativa"]).maybeSingle().then((r) => setMi(r.data)); else setMi(null); };
-  useEffect(() => { ler(); }, [sessao?.user?.id]);
+const DIAS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+function Planos({ sessao, onLogin, cfg }) {
+  const [pl, setPl] = useState([]); const [mi, setMi] = useState(null); const [m, setM] = useState(""); const [pets, setPets] = useState([]); const [st, setSt] = useState([]); const [fx, setFx] = useState({ pet: "", dia: "", hora: "", st: "" });
+  const ler = () => { sb.from("plans").select("*").eq("ativo", true).order("preco").then((r) => setPl(r.data || []));
+    if (sessao) { sb.from("subscriptions").select("*,plans(nome,banhos_mes),staff(nome),pets(nome)").eq("user_id", sessao.user.id).in("status", ["aguardando_pagamento", "ativa"]).maybeSingle().then((r) => setMi(r.data)); sb.from("pets").select("id,nome").eq("user_id", sessao.user.id).then((r) => setPets(r.data || [])); } else setMi(null); };
+  useEffect(() => { ler(); sb.from("staff").select("id,nome").eq("ativo", true).then((r) => setSt(r.data || [])); }, [sessao?.user?.id]);
+  useEffect(() => { if (mi) setFx({ pet: mi.pet_id || "", dia: mi.dia_fixo ?? "", hora: mi.hora_fixa ?? "", st: mi.staff_id || "" }); }, [mi?.id, mi?.dia_fixo, mi?.hora_fixa]);
   if (!pl.length && !mi) return null;
   const assinar = async (id) => { if (!sessao) return onLogin(); const r = await sb.rpc("assinar", { p_plan: id }); setM(r.error ? (r.error.message === "ja_possui_plano" ? "Você já possui um plano." : r.error.message) : "Assinatura registrada. A loja confirma o pagamento e ativa o seu plano (a cobrança online PagBank ainda não está configurada)."); ler(); };
+  const fixo = async (limpar) => { const r = await sb.rpc("salvar_horario_fixo", limpar ? {} : { p_pet: +fx.pet, p_dia: +fx.dia, p_hora: +fx.hora, p_staff: +fx.st }); setM(r.error ? (r.error.message === "horario_fixo_ocupado" ? "Esse horário fixo já é de outro assinante. Escolha outro." : r.error.message) : limpar ? "Horário fixo removido." : "Horário fixo salvo! A loja reserva esse horário e gera a sua agenda."); ler(); };
+  const horas = []; if (cfg?.abre != null) for (let t = cfg.abre; t + 60 <= cfg.fecha; t += 30) horas.push(t);
+  const sel = "w-full min-h-[48px] px-3 rounded-xl bg-[#111] border border-white/15";
   return <div className="space-y-3 pt-4"><h2 className="serif text-3xl gt">Planos de banho</h2>{m && <Card className="text-amber-300 text-sm">{m}</Card>}
-    {mi ? <Card><b>{mi.plans?.nome}</b><div className="text-sm text-gray-400">{mi.status === "ativa" ? `Ativo até ${mi.vence?.split("-").reverse().join("/")} · ${mi.banhos_usados}/${mi.plans?.banhos_mes} banhos usados` : "Aguardando confirmação do pagamento pela loja"}</div></Card>
+    {mi ? <><Card><b>{mi.plans?.nome}</b><div className="text-sm text-gray-400">{mi.status === "ativa" ? `Ativo até ${mi.vence?.split("-").reverse().join("/")} · ${mi.banhos_usados}/${mi.plans?.banhos_mes} banhos usados` : "Aguardando confirmação do pagamento pela loja"}</div></Card>
+      {mi.status === "ativa" && <Card className="space-y-2"><b>Dia e horário fixo</b>
+        {mi.dia_fixo != null && <p className="text-sm gt">Toda {DIAS[mi.dia_fixo].toLowerCase()} às {hhmm(mi.hora_fixa)} · {mi.staff?.nome} · {mi.pets?.nome}</p>}
+        <select className={sel} value={fx.pet} onChange={(e) => setFx({ ...fx, pet: e.target.value })}><option value="">Pet</option>{pets.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}</select>
+        <select className={sel} value={fx.dia} onChange={(e) => setFx({ ...fx, dia: e.target.value })}><option value="">Dia da semana</option>{DIAS.map((d, i) => <option key={i} value={i}>{d}</option>)}</select>
+        <select className={sel} value={fx.st} onChange={(e) => setFx({ ...fx, st: e.target.value })}><option value="">Profissional</option>{st.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}</select>
+        <select className={sel} value={fx.hora} onChange={(e) => setFx({ ...fx, hora: e.target.value })}><option value="">Horário</option>{horas.map((h) => <option key={h} value={h}>{hhmm(h)}</option>)}</select>
+        <Btn gold className="w-full" disabled={!fx.pet || fx.dia === "" || fx.hora === "" || !fx.st} onClick={() => fixo(false)}>Salvar horário fixo</Btn>
+        {mi.dia_fixo != null && <Btn className="w-full" onClick={() => fixo(true)}>Remover horário fixo</Btn>}</Card>}</>
     : pl.map((p) => <Card key={p.id}><div className="flex justify-between"><b>{p.nome}</b><b className="gt">{brl(p.preco)}/mês</b></div><div className="text-sm text-gray-400 mb-2">{p.descricao}</div><Btn gold className="w-full" onClick={() => assinar(p.id)}>Quero assinar</Btn></Card>)}</div>;
 }
+
 function Assinaturas() {
   const [l, setL] = useState([]);
-  const ler = () => sb.from("subscriptions").select("*,profiles(nome),plans(nome,preco)").order("criado_em", { ascending: false }).then((r) => setL(r.data || []));
+  const ler = () => sb.from("subscriptions").select("*,profiles(nome),plans(nome,preco),staff(nome),pets(nome)").order("criado_em", { ascending: false }).then((r) => setL(r.data || []));
   useEffect(() => { ler(); }, []);
   const mudar = async (s, status) => { const h = new Date(), v = new Date(); v.setDate(v.getDate() + 30); const o = status === "ativa" ? { status, inicio: iso(h), vence: iso(v), banhos_usados: 0 } : { status }; const r = await sb.from("subscriptions").update(o).eq("id", s.id); if (r.error) alert(r.error.message); ler(); };
+  const gerar = async (s) => { const r = await sb.rpc("gerar_agenda_fixa", { p_sub: s.id }); if (r.error) return alert(r.error.message); alert(`${r.data.criados} agendamento(s) criado(s)` + (r.data.pulados ? `, ${r.data.pulados} data(s) puladas por bloqueio ou conflito` : "") + "."); ler(); };
   return <div className="space-y-2"><b>Assinaturas</b>{!l.length && <p className="text-sm text-gray-400">Nenhuma assinatura ainda.</p>}
-    {l.map((s) => <Card key={s.id} className="text-sm"><b>{s.profiles?.nome || "Cliente"}</b> · {s.plans?.nome} · {brl(s.plans?.preco)}<div className="text-gray-400">{s.status.replace("_", " ")}{s.vence ? " · vence " + s.vence.split("-").reverse().join("/") : ""}</div>
-      <div className="grid grid-cols-2 gap-2 mt-2">{s.status !== "ativa" && s.status !== "cancelada" && <Btn gold onClick={() => mudar(s, "ativa")}>Confirmar pagamento</Btn>}{s.status === "ativa" && <Btn gold onClick={() => mudar(s, "ativa")}>Renovar +30 dias</Btn>}{s.status !== "cancelada" && <Btn onClick={() => mudar(s, "cancelada")}>Cancelar</Btn>}</div></Card>)}</div>;
+    {l.map((s) => <Card key={s.id} className="text-sm"><b>{s.profiles?.nome || "Cliente"}</b> · {s.plans?.nome} · {brl(s.plans?.preco)}<div className="text-gray-400">{s.status.replace("_", " ")}{s.vence ? " · vence " + s.vence.split("-").reverse().join("/") : ""} · banhos usados {s.banhos_usados}<br />{s.dia_fixo != null ? `Fixo: ${DIAS[s.dia_fixo]} às ${hhmm(s.hora_fixa)} · ${s.staff?.nome} · ${s.pets?.nome}` : "Sem horário fixo"}</div>
+      <div className="grid grid-cols-2 gap-2 mt-2">{s.status !== "ativa" && s.status !== "cancelada" && <Btn gold onClick={() => mudar(s, "ativa")}>Confirmar pagamento</Btn>}{s.status === "ativa" && <Btn gold onClick={() => mudar(s, "ativa")}>Renovar +30 dias</Btn>}{s.status !== "cancelada" && <Btn onClick={() => mudar(s, "cancelada")}>Cancelar</Btn>}{s.status === "ativa" && s.dia_fixo != null && <Btn onClick={() => gerar(s)}>Gerar agenda fixa</Btn>}</div></Card>)}</div>;
 }
 
 const METODOS = [["dinheiro", "Dinheiro"], ["pix", "PIX"], ["debito", "Débito"], ["credito", "Crédito"]];
@@ -340,19 +357,19 @@ function Caixa() {
 }
 
 function Admin() {
-  const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]); const [eq, setEq] = useState([]);
-  useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); sb.from("staff").select("id,nome").order("nome").then((r) => setEq(r.data || [])); }, [t]);
+  const [t, setT] = useState("pedidos"); const [cats, setCats] = useState([]); const [eq, setEq] = useState([]); const [sv, setSv] = useState([]);
+  useEffect(() => { sb.from("categories").select("id,nome").order("nome").then((r) => setCats(r.data || [])); sb.from("staff").select("id,nome").order("nome").then((r) => setEq(r.data || [])); sb.from("services").select("id,nome").order("nome").then((r) => setSv(r.data || [])); }, [t]);
   const abas = [["pedidos", "Pedidos"], ["agenda", "Agenda"], ["caixa", "Caixa"], ["produtos", "Produtos"], ["servicos", "Serviços"], ["categorias", "Categorias"], ["equipe", "Equipe e bloqueios"], ["planos", "Planos"], ["clientes", "Clientes"], ["relatorios", "Relatórios"], ["loja", "Loja"]];
   const off = (x) => x.ativo === false ? " (inativo)" : "";
   return <div className="space-y-3"><h2 className="serif text-3xl gt">Painel</h2>
     <div className="flex gap-2 overflow-x-auto pb-1">{abas.map(([id, l]) => <button key={id} onClick={() => setT(id)} className={`shrink-0 px-4 min-h-[40px] rounded-full border ${t === id ? "gold border-transparent" : "border-white/20"}`}>{l}</button>)}</div>
     {t === "pedidos" ? <Pedidos /> : t === "agenda" ? <AgendaAdm /> : t === "caixa" ? <Caixa /> 
     : t === "equipe" ? <><b>Profissionais</b><Crud tab="staff" campos={[["nome", "Nome", "t"], ["comissao_pct", "Comissão (%)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">Comissão {x.comissao_pct}%</div></>} /><b className="block pt-2">Bloqueios de agenda</b><Crud tab="blocks" cats={eq} campos={[["data", "Data", "date"], ["hora_ini", "Início (minutos; vazio = dia todo)", "num"], ["hora_fim", "Fim (minutos; vazio = dia todo)", "num"], ["staff_id", "Profissional (vazio = todos)", "cat"], ["motivo", "Motivo", "t"]]} resumo={(x) => <><b>{x.data.split("-").reverse().join("/")}</b> · {x.hora_ini != null ? hhmm(x.hora_ini) + "–" + hhmm(x.hora_fim) : "dia todo"} · {eq.find((e) => e.id === x.staff_id)?.nome || "todos"}<div className="text-gray-400">{x.motivo}</div></>} /></>
-    : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
+    : t === "planos" ? <><Assinaturas /><b className="block pt-2">Planos oferecidos</b><Crud tab="plans" cats={sv} campos={[["service_id", "Serviço incluído no plano", "cat"], ["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço mensal", "num"], ["banhos_mes", "Banhos por mês", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{x.ativo === false ? " (inativo)" : ""}<div className="text-gray-400">{brl(x.preco)} · {x.banhos_mes} banhos/mês</div></>} /></> : t === "clientes" ? <Clientes /> : t === "relatorios" ? <Relatorios />
     : t === "produtos" ? <Crud tab="products" cats={cats} campos={[["nome", "Nome", "t"], ["marca", "Marca", "t"], ["categoria_id", "Categoria", "cat"], ["preco", "Preço", "num"], ["preco_promo", "Preço promocional", "num"], ["estoque", "Estoque", "num"], ["sku", "SKU", "t"], ["imagem", "Foto", "img"], ["descricao", "Descrição", "t"], ["destaque", "Destaque", "bool"], ["exige_receita", "Exige receita", "bool"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · estoque {x.estoque}</div></>} />
     : t === "servicos" ? <Crud tab="services" campos={[["nome", "Nome", "t"], ["descricao", "Descrição", "t"], ["preco", "Preço", "num"], ["duracao_min", "Duração (min)", "num"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}<div className="text-gray-400">{brl(x.preco)} · {x.duracao_min} min</div></>} />
     : t === "categorias" ? <Crud tab="categories" cats={cats} campos={[["nome", "Nome", "t"], ["parent_id", "Categoria principal (vazio = principal)", "cat"], ["ordem", "Ordem", "num"], ["imagem", "Foto", "img"], ["ativo", "Ativo", "bool"]]} resumo={(x) => <><b>{x.nome}</b>{off(x)}{x.parent_id ? <span className="text-gray-400"> · subcategoria</span> : null}</>} />
-    : <Crud tab="store_settings" noNew campos={[["nome", "Nome da loja", "t"], ["whatsapp", "WhatsApp (55 + DDD + número)", "t"], ["endereco", "Endereço", "t"], ["abre", "Abre (minutos, 540 = 09:00)", "num"], ["fecha", "Fecha (minutos, 1080 = 18:00)", "num"]]} resumo={(x) => <><b>{x.nome}</b><div className="text-gray-400">WhatsApp: {x.whatsapp || "não definido"}<br />Horário: {x.abre != null ? hhmm(x.abre) + "–" + hhmm(x.fecha) : "não definido"}<br />Toque para editar</div></>} />}</div>;
+    : <Crud tab="store_settings" noNew campos={[["nome", "Nome da loja", "t"], ["whatsapp", "WhatsApp (55 + DDD + número)", "t"], ["endereco", "Endereço", "t"], ["abre", "Abre (minutos, 540 = 09:00)", "num"], ["fecha", "Fecha (minutos, 1080 = 18:00)", "num"], ["desconto_app", "Desconto ao agendar pelo app (R$, 0 = sem)", "num"], ["desconto_min", "Desconto vale a partir de (R$)", "num"], ["promo_ate", "Promoção vale até", "date"]]} resumo={(x) => <><b>{x.nome}</b><div className="text-gray-400">WhatsApp: {x.whatsapp || "não definido"}<br />Horário: {x.abre != null ? hhmm(x.abre) + "–" + hhmm(x.fecha) : "não definido"}<br />Toque para editar</div></>} />}</div>;
 }
 
 function App() {
